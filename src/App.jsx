@@ -7,6 +7,8 @@ import { TANK_TIERS, getTankStats } from './tankData.js'
 import LowPolyTank from './LowPolyTank.jsx'
 import { SHIP_TIERS, getShipStats } from './shipData.js'
 import LowPolyShip from './LowPolyShip.jsx'
+import { PLANE_TIERS, getPlaneStats } from './planeData.js'
+import LowPolyPlane from './LowPolyPlane.jsx'
 import './App.css'
 
 const STORAGE_SERVERS = 'tf_servers_v2'
@@ -94,6 +96,9 @@ export default function App(){
   const [ships, setShips] = useState([]) // hajók
   const [shipQueue, setShipQueue] = useState([])
   const [selectedShipId, setSelectedShipId] = useState(null)
+  const [planes, setPlanes] = useState([]) // repülők
+  const [planeQueue, setPlaneQueue] = useState([])
+  const [selectedPlaneId, setSelectedPlaneId] = useState(null)
   const tickRef = useRef(null)
   const techBonuses = calcTechBonuses(techLevels)
 
@@ -171,7 +176,7 @@ export default function App(){
     setDivisions(divs)
     pushNotif(`Beléptél mint ${country.name} — főváros: ${country.capital} — sok sikert, ${playerName}!`, 'ok')
     addTicker(`BREAKING NEWS: ${country.name} just joined ${currentServer?.name || 'EU Hadszíntér #1'}`)
-    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null)
+    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null); setPlanes([]); setPlaneQueue([]); setSelectedPlaneId(null)
   }
 
   // Game loop
@@ -344,7 +349,47 @@ export default function App(){
         const bob = Math.sin(Date.now()/200 + t.x)*0.7
         return {...t, x: nx, y: ny+bob*0.1, rotation: angle, stats}
       }))
-      // TANK & SHIP COMBAT
+      // PLANE QUEUE
+      setPlaneQueue(q=>{
+        if(q.length===0) return q
+        const tb = calcTechBonuses(techLevels)
+        const speedBoost = 1 + tb.armySpawnSpeed/100
+        let newQ = q.map(item=> ({...item, progress: item.progress + 0.1 * speedBoost}))
+        const finished = newQ.filter(i=> i.progress >= i.max)
+        const remaining = newQ.filter(i=> i.progress < i.max)
+        if(finished.length){
+          finished.forEach(f=>{
+            const tier = f.tier
+            const city = cities.find(c=> c.id===f.cityId)
+            if(city){
+              const stats = getPlaneStats(tier, calcTechBonuses(techLevels))
+              setPlanes(p=> [...p, {
+                id:`plane-${Date.now()}-${Math.random()}`,
+                tier, x: city.x + (Math.random()*10-5), y: city.y -10 - Math.random()*6,
+                targetX: city.x, targetY: city.y-10, owner:'player', hp: stats.hp, maxHp: stats.hp, rotation: -20, stats
+              }])
+              pushNotif(`Repülő kész: ${stats.name} R${tier} — ${city.name}! ✈️`, 'ok')
+              addTicker(`Repülő gyártás: ${stats.name} kész`)
+            }
+          })
+        }
+        return remaining
+      })
+      // PLANE MOVEMENT - leggyorsabb
+      setPlanes(ps=> ps.map(t=>{
+        const dx = t.targetX - t.x
+        const dy = t.targetY - t.y
+        const dist = Math.sqrt(dx*dx + dy*dy)
+        if(dist < 1.5) return t
+        const stats = getPlaneStats(t.tier, calcTechBonuses(techLevels))
+        const step = stats.speed * 0.1
+        const nx = t.x + (dx/dist)* Math.min(step, dist)
+        const ny = t.y + (dy/dist)* Math.min(step, dist)
+        const angle = Math.atan2(dy,dx)*180/Math.PI
+        const bob = Math.sin(Date.now()/150 + t.x)*0.8
+        return {...t, x: nx, y: ny + bob*0.12, rotation: angle, stats}
+      }))
+      // TANK & SHIP & PLANE COMBAT
       tanks.forEach(t=>{
         if(t.owner!=='player') return
         const enemyCities = cities.filter(c=> owners[c.id] && owners[c.id]!=='player')
@@ -375,6 +420,21 @@ export default function App(){
           }
         }
       })
+      planes.forEach(pl=>{
+        if(pl.owner!=='player') return
+        const enemyCities = cities.filter(c=> owners[c.id] && owners[c.id]!=='player')
+        for(const ec of enemyCities){
+          const d = Math.hypot(pl.x - ec.x, pl.y - ec.y)
+          if(d < 16){
+            if(Math.random()<0.09){
+              const dmg = Math.floor(pl.stats.damage * (0.75+Math.random()*0.45))
+              const id = Date.now()+Math.random()
+              setFloatingDamages(f=> [...f, {id, x: ec.x, y: ec.y, val: `-${dmg} ✈️`, color:'#a29bfe'}])
+              setTimeout(()=> setFloatingDamages(f=> f.filter(x=>x.id!==id)), 850)
+            }
+          }
+        }
+      })
 
       // random bot ticker
       if(Math.random()<0.006 && bots.length){
@@ -384,7 +444,7 @@ export default function App(){
       }
     }, 100)
     return ()=> clearInterval(tickRef.current)
-  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, captureWar, war])
+  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, ships, planes, captureWar, war])
 
   function startWar(targetCity){
     if(war || captureWar) return pushNotif('Már folyamatban van egy hadművelet!', 'warn')
@@ -460,6 +520,19 @@ export default function App(){
     setResources(r=> ({...r, money: r.money - stats.costMoney, manpower: r.manpower - stats.costManpower}))
     setShipQueue(q=> [...q, { id:`sq-${Date.now()}-${Math.random()}`, tier, cityId: city.id, progress:0, max: stats.buildTime, name: stats.name }])
     pushNotif(`Hajó gyártás: ${stats.name} H${tier} → ${city.name} (${stats.buildTime}s)`, 'info')
+  }
+  function orderPlane(tier, city){
+    if(owners[city.id]!=='player') return pushNotif('Csak saját városban gyárthatsz repülőt!','warn')
+    const stats = getPlaneStats(tier, techBonuses)
+    if(resources.money < stats.costMoney || resources.manpower < stats.costManpower) return pushNotif(`Nincs elég erőforrás: ${formatMoney(stats.costMoney)} + ${formatManpower(stats.costManpower)}`, 'warn')
+    if(planeQueue.length>=3) return pushNotif('Repülő sor tele! Max 3.', 'warn')
+    setResources(r=> ({...r, money: r.money - stats.costMoney, manpower: r.manpower - stats.costManpower}))
+    setPlaneQueue(q=> [...q, { id:`pq-${Date.now()}-${Math.random()}`, tier, cityId: city.id, progress:0, max: stats.buildTime, name: stats.name }])
+    pushNotif(`Repülő gyártás: ${stats.name} R${tier} → ${city.name} (${stats.buildTime}s) ✈️`, 'info')
+  }
+  function movePlaneTo(planeId, targetCity){
+    setPlanes(ps=> ps.map(p=> p.id===planeId ? {...p, targetX: targetCity.x + (Math.random()*8-4), targetY: targetCity.y -12 + (Math.random()*6-3)} : p))
+    pushNotif(`Repülő parancs: ${targetCity.name} fölé!`, 'info')
   }
   function moveShipTo(shipId, targetCity){
     setShips(ss=> ss.map(s=> s.id===shipId ? {...s, targetX: targetCity.x + (Math.random()*12-6), targetY: targetCity.y + (Math.random()*8-4)} : s))
@@ -690,6 +763,10 @@ export default function App(){
                       const ship = ships.find(s=> s.id===selectedShipId)
                       if(ship) { moveShipTo(selectedShipId, city); setSelectedShipId(null); return }
                     }
+                    if(selectedPlaneId){
+                      const plane = planes.find(pp=> pp.id===selectedPlaneId)
+                      if(plane) { movePlaneTo(selectedPlaneId, city); setSelectedPlaneId(null); return }
+                    }
                     if(e.ctrlKey || e.metaKey){ if(!isOwn) return pushNotif('Csak saját területet jelölhetsz!','warn'); setMultiSelect(m=> m.includes(city.id) ? m.filter(x=>x!==city.id) : [...m, city.id]); return}
                     setSelectedCityId(city.id)
                   }
@@ -745,12 +822,26 @@ export default function App(){
                 {ships.map(s=>{
                   const isSel = selectedShipId===s.id
                   return (
-                    <g key={s.id} onClick={(e)=>{ e.stopPropagation(); setSelectedShipId(s.id); setSelectedTankId(null);}} style={{cursor:'pointer'}}>
+                    <g key={s.id} onClick={(e)=>{ e.stopPropagation(); setSelectedShipId(s.id); setSelectedTankId(null); setSelectedPlaneId(null);}} style={{cursor:'pointer'}}>
                       {isSel && <circle cx={s.x} cy={s.y} r="11" fill="none" stroke="#3498db" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
                       <LowPolyShip x={s.x} y={s.y} tier={s.tier} rotation={s.rotation} owner={s.owner} scale={isSel?1.08:1}/>
                       <g transform={`translate(${s.x} ${s.y+9})`}>
                         <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
                         <rect x="-7.5" y="0.4" width={`${15 * (s.hp/s.maxHp)}`} height="1.7" rx="0.8" fill={s.hp/s.maxHp>0.5 ? '#3498db' : s.hp/s.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
+                      </g>
+                    </g>
+                  )
+                })}
+                {/* PLANES - low poly repülők, leggyorsabb */}
+                {planes.map(pl=>{
+                  const isSel = selectedPlaneId===pl.id
+                  return (
+                    <g key={pl.id} onClick={(e)=>{ e.stopPropagation(); setSelectedPlaneId(pl.id); setSelectedTankId(null); setSelectedShipId(null);}} style={{cursor:'pointer'}}>
+                      {isSel && <circle cx={pl.x} cy={pl.y} r="10" fill="none" stroke="#a29bfe" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
+                      <LowPolyPlane x={pl.x} y={pl.y} tier={pl.tier} rotation={pl.rotation} owner={pl.owner} scale={isSel?1.08:1}/>
+                      <g transform={`translate(${pl.x} ${pl.y+8})`}>
+                        <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
+                        <rect x="-7.5" y="0.4" width={`${15 * (pl.hp/pl.maxHp)}`} height="1.7" rx="0.8" fill={pl.hp/pl.maxHp>0.5 ? '#a29bfe' : pl.hp/pl.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
                       </g>
                     </g>
                   )
@@ -896,6 +987,37 @@ export default function App(){
                           </div>
                         )}
                         {selectedShipId && (()=>{ const ss=ships.find(x=>x.id===selectedShipId); if(!ss) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(52,152,219,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(52,152,219,0.4)'}}><b>Kiválasztva: Hajó H{ss.tier}</b> — kattints tengerparti városra! <button className="btn ghost small" onClick={()=> setSelectedShipId(null)}>Mégse</button></div>})()}
+                      </div>
+                      <div className="panel plane-factory" style={{marginTop:10, background:'#1a1a2e', border:'2px solid #4a4a6e', borderRadius:10, padding:10}}>
+                        <h4 style={{margin:'0 0 6px 0', fontSize:13}}>✈️ Légierő — növekvő sorrend (leggyorsabb + tech)</h4>
+                        <p className="muted" style={{fontSize:11}}>R1 felderítő → R4 stealth: egyre erősebb & leggyorsabb. Tech mindent boostol!</p>
+                        <div className="plane-grid" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                          {PLANE_TIERS.map(pl=>{
+                            const stats = getPlaneStats(pl.tier, techBonuses)
+                            const canAfford = resources.money >= stats.costMoney && resources.manpower >= stats.costManpower
+                            return (
+                              <div key={pl.tier} className="plane-card" style={{background:'#1e1e3a', border:'1.5px solid #4a4a6e', borderRadius:8, padding:8, textAlign:'center'}}>
+                                <div style={{fontWeight:900, fontSize:12}}>{pl.icon} R{pl.tier} {pl.name}</div>
+                                <div style={{fontSize:11, color:'#aab4c0'}}>{stats.damage} dmg • {stats.speed} spd • {stats.hp} HP</div>
+                                <div style={{fontSize:10, background:'rgba(0,0,0,0.25)', padding:'3px', borderRadius:6, margin:'4px 0'}}>{formatMoney(stats.costMoney)}<br/>{formatManpower(stats.costManpower)} • {stats.buildTime}s</div>
+                                {(stats.dmgMult!=='1.00' || stats.speedMult!=='1.00') && <div style={{fontSize:9, color:'#a29bfe', fontWeight:800}}>Tech: ×{stats.dmgMult} • ×{stats.speedMult}</div>}
+                                <button className="btn primary small" style={{background:'#6c5ce7', borderColor:'#4a3f9a', width:'100%', marginTop:6}} disabled={!canAfford || planeQueue.length>=3} onClick={()=> orderPlane(pl.tier, selectedCity)}>Felszállás</button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {planeQueue.length>0 && (
+                          <div style={{marginTop:8}}>
+                            <div style={{fontSize:11, fontWeight:800}}>Hangár sor: {planeQueue.length}/3</div>
+                            {planeQueue.filter(q=> q.cityId===selectedCity.id).map(q=> (
+                              <div key={q.id} style={{background:'rgba(40,20,60,0.3)', borderRadius:6, padding:6, marginTop:4, fontSize:11}}>
+                                <div style={{display:'flex', justifyContent:'space-between'}}><b>{q.name} R{q.tier}</b><span>{q.progress.toFixed(1)}/{q.max}s</span></div>
+                                <div className="progress" style={{height:6, margin:'4px 0'}}><div className="fill" style={{width:`${(q.progress/q.max)*100}%`, background:'#a29bfe'}}></div></div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedPlaneId && (()=>{ const pp=planes.find(x=>x.id===selectedPlaneId); if(!pp) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(162,155,254,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(162,155,254,0.4)'}}><b>Kiválasztva: Repülő R{pp.tier}</b> — kattints városra bombázni! <button className="btn ghost small" onClick={()=> setSelectedPlaneId(null)}>Mégse</button></div>})()}
                       </div>
                     </>
                   ) : (
