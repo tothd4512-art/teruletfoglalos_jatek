@@ -5,6 +5,8 @@ import TechTree from './TechTree.jsx'
 import { calcTechBonuses, TECH_COSTS } from './techData.js'
 import { TANK_TIERS, getTankStats } from './tankData.js'
 import LowPolyTank from './LowPolyTank.jsx'
+import { SHIP_TIERS, getShipStats } from './shipData.js'
+import LowPolyShip from './LowPolyShip.jsx'
 import './App.css'
 
 const STORAGE_SERVERS = 'tf_servers_v2'
@@ -89,6 +91,9 @@ export default function App(){
   const [tanks, setTanks] = useState([]) // {id, tier, x,y, targetX,targetY, owner, hp, rotation}
   const [tankQueue, setTankQueue] = useState([]) // {id, tier, cityId, progress, max}
   const [selectedTankId, setSelectedTankId] = useState(null)
+  const [ships, setShips] = useState([]) // hajók
+  const [shipQueue, setShipQueue] = useState([])
+  const [selectedShipId, setSelectedShipId] = useState(null)
   const tickRef = useRef(null)
   const techBonuses = calcTechBonuses(techLevels)
 
@@ -166,7 +171,7 @@ export default function App(){
     setDivisions(divs)
     pushNotif(`Beléptél mint ${country.name} — főváros: ${country.capital} — sok sikert, ${playerName}!`, 'ok')
     addTicker(`BREAKING NEWS: ${country.name} just joined ${currentServer?.name || 'EU Hadszíntér #1'}`)
-    setTanks([]); setTankQueue([]); setSelectedTankId(null)
+    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null)
   }
 
   // Game loop
@@ -262,7 +267,7 @@ export default function App(){
       setTankQueue(q=>{
         if(q.length===0) return q
         const tb = calcTechBonuses(techLevels)
-        const speedBoost = 1 + tb.armySpawnSpeed/100 // tech also helps tank build
+        const speedBoost = 1 + tb.armySpawnSpeed/100
         let newQ = q.map(item=> ({...item, progress: item.progress + 0.1 * speedBoost}))
         const finished = newQ.filter(i=> i.progress >= i.max)
         const remaining = newQ.filter(i=> i.progress < i.max)
@@ -291,28 +296,80 @@ export default function App(){
         const dist = Math.sqrt(dx*dx + dy*dy)
         if(dist < 1.5) return {...t, rotation: t.rotation}
         const stats = getTankStats(t.tier, calcTechBonuses(techLevels))
-        const step = stats.speed * 0.1 // per 100ms
+        const step = stats.speed * 0.1
         const nx = t.x + (dx/dist)* Math.min(step, dist)
         const ny = t.y + (dy/dist)* Math.min(step, dist)
         const angle = Math.atan2(dy,dx)*180/Math.PI
-        // simple wiggle for ratyi low poly
         const jig = Math.sin(Date.now()/120 + t.x)*0.6
         return {...t, x: nx, y: ny+jig*0.15, rotation: angle, stats}
       }))
-      // TANK COMBAT: if tank reaches enemy city, assist capture
-      // check tanks near enemy cities
+      // SHIP QUEUE
+      setShipQueue(q=>{
+        if(q.length===0) return q
+        const tb = calcTechBonuses(techLevels)
+        const speedBoost = 1 + tb.armySpawnSpeed/100
+        let newQ = q.map(item=> ({...item, progress: item.progress + 0.1 * speedBoost}))
+        const finished = newQ.filter(i=> i.progress >= i.max)
+        const remaining = newQ.filter(i=> i.progress < i.max)
+        if(finished.length){
+          finished.forEach(f=>{
+            const tier = f.tier
+            const city = cities.find(c=> c.id===f.cityId)
+            if(city){
+              const stats = getShipStats(tier, calcTechBonuses(techLevels))
+              // hajó a tengerhez közeli pontra spawnol (víz)
+              setShips(s=> [...s, {
+                id:`ship-${Date.now()}-${Math.random()}`,
+                tier, x: city.x + 14 + Math.random()*8, y: city.y + Math.random()*10,
+                targetX: city.x+14, targetY: city.y, owner:'player', hp: stats.hp, maxHp: stats.hp, rotation: -15, stats
+              }])
+              pushNotif(`Hajó kész: ${stats.name} H${tier} — ${city.name}!`, 'ok')
+              addTicker(`Hajó gyártás: ${stats.name} kész`)
+            }
+          })
+        }
+        return remaining
+      })
+      // SHIP MOVEMENT - vízen gyorsabb
+      setShips(ss=> ss.map(t=>{
+        const dx = t.targetX - t.x
+        const dy = t.targetY - t.y
+        const dist = Math.sqrt(dx*dx + dy*dy)
+        if(dist < 1.2) return t
+        const stats = getShipStats(t.tier, calcTechBonuses(techLevels))
+        const step = stats.speed * 0.1
+        const nx = t.x + (dx/dist)* Math.min(step, dist)
+        const ny = t.y + (dy/dist)* Math.min(step, dist)
+        const angle = Math.atan2(dy,dx)*180/Math.PI
+        const bob = Math.sin(Date.now()/200 + t.x)*0.7
+        return {...t, x: nx, y: ny+bob*0.1, rotation: angle, stats}
+      }))
+      // TANK & SHIP COMBAT
       tanks.forEach(t=>{
         if(t.owner!=='player') return
         const enemyCities = cities.filter(c=> owners[c.id] && owners[c.id]!=='player')
         for(const ec of enemyCities){
           const d = Math.hypot(t.x - ec.x, t.y - ec.y)
           if(d < 10 && !captureWar && !war){
-            // auto assist: tank deals damage to city defense
-            // we simulate by creating floating damage
             if(Math.random()<0.08){
               const dmg = Math.floor(t.stats.damage * (0.8+Math.random()*0.4))
               const id = Date.now()+Math.random()
               setFloatingDamages(f=> [...f, {id, x: ec.x, y: ec.y, val: `-${dmg} 🚛`, color:'#ff7f50'}])
+              setTimeout(()=> setFloatingDamages(f=> f.filter(x=>x.id!==id)), 900)
+            }
+          }
+        }
+      })
+      ships.forEach(s=>{
+        if(s.owner!=='player') return
+        const enemyCities = cities.filter(c=> owners[c.id] && owners[c.id]!=='player')
+        for(const ec of enemyCities){
+          const d = Math.hypot(s.x - ec.x, s.y - ec.y)
+          if(d < 18 && !captureWar){
+            if(Math.random()<0.06){
+              const dmg = Math.floor(s.stats.damage * (0.7+Math.random()*0.5))
+              const id = Date.now()+Math.random()
+              setFloatingDamages(f=> [...f, {id, x: ec.x, y: ec.y, val: `-${dmg} 🚢`, color:'#3498db'}])
               setTimeout(()=> setFloatingDamages(f=> f.filter(x=>x.id!==id)), 900)
             }
           }
@@ -393,7 +450,20 @@ export default function App(){
   }
   function moveTankTo(tankId, targetCity){
     setTanks(ts=> ts.map(t=> t.id===tankId ? {...t, targetX: targetCity.x + (Math.random()*8-4), targetY: targetCity.y + (Math.random()*8-4)} : t))
-    pushNotif(`Tank parancs: mozgas ${targetCity.name}-ba`, 'info')
+    pushNotif(`Tank parancs: mozgás ${targetCity.name}-ba`, 'info')
+  }
+  function orderShip(tier, city){
+    if(owners[city.id]!=='player') return pushNotif('Csak saját kikötővárosban gyárthatsz hajót!','warn')
+    const stats = getShipStats(tier, techBonuses)
+    if(resources.money < stats.costMoney || resources.manpower < stats.costManpower) return pushNotif(`Nincs elég erőforrás: ${formatMoney(stats.costMoney)} + ${formatManpower(stats.costManpower)}`, 'warn')
+    if(shipQueue.length>=3) return pushNotif('Hajó sor tele! Max 3.', 'warn')
+    setResources(r=> ({...r, money: r.money - stats.costMoney, manpower: r.manpower - stats.costManpower}))
+    setShipQueue(q=> [...q, { id:`sq-${Date.now()}-${Math.random()}`, tier, cityId: city.id, progress:0, max: stats.buildTime, name: stats.name }])
+    pushNotif(`Hajó gyártás: ${stats.name} H${tier} → ${city.name} (${stats.buildTime}s)`, 'info')
+  }
+  function moveShipTo(shipId, targetCity){
+    setShips(ss=> ss.map(s=> s.id===shipId ? {...s, targetX: targetCity.x + (Math.random()*12-6), targetY: targetCity.y + (Math.random()*8-4)} : s))
+    pushNotif(`Hajó parancs: ${targetCity.name} felé`, 'info')
   }
   function upgradeEconomySingle(city){
     if(owners[city.id]!=='player') return pushNotif('Csak saját várost fejleszthetsz!','warn')
@@ -616,6 +686,10 @@ export default function App(){
                       const tank = tanks.find(t=> t.id===selectedTankId)
                       if(tank) { moveTankTo(selectedTankId, city); setSelectedTankId(null); return }
                     }
+                    if(selectedShipId){
+                      const ship = ships.find(s=> s.id===selectedShipId)
+                      if(ship) { moveShipTo(selectedShipId, city); setSelectedShipId(null); return }
+                    }
                     if(e.ctrlKey || e.metaKey){ if(!isOwn) return pushNotif('Csak saját területet jelölhetsz!','warn'); setMultiSelect(m=> m.includes(city.id) ? m.filter(x=>x!==city.id) : [...m, city.id]); return}
                     setSelectedCityId(city.id)
                   }
@@ -657,13 +731,26 @@ export default function App(){
                 {tanks.map(t=>{
                   const isSel = selectedTankId===t.id
                   return (
-                    <g key={t.id} onClick={(e)=>{ e.stopPropagation(); setSelectedTankId(t.id);}} style={{cursor:'pointer'}}>
+                    <g key={t.id} onClick={(e)=>{ e.stopPropagation(); setSelectedTankId(t.id); setSelectedShipId(null);}} style={{cursor:'pointer'}}>
                       {isSel && <circle cx={t.x} cy={t.y} r="10" fill="none" stroke="#f1c40f" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
                       <LowPolyTank x={t.x} y={t.y} tier={t.tier} rotation={t.rotation} owner={t.owner} scale={isSel?1.08:1}/>
-                      {/* hp bar */}
                       <g transform={`translate(${t.x} ${t.y+9})`}>
                         <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
                         <rect x="-7.5" y="0.4" width={`${15 * (t.hp/t.maxHp)}`} height="1.7" rx="0.8" fill={t.hp/t.maxHp>0.5 ? '#2ecc71' : t.hp/t.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
+                      </g>
+                    </g>
+                  )
+                })}
+                {/* SHIPS - low poly hajók, növekvő erő + tech, vízen */}
+                {ships.map(s=>{
+                  const isSel = selectedShipId===s.id
+                  return (
+                    <g key={s.id} onClick={(e)=>{ e.stopPropagation(); setSelectedShipId(s.id); setSelectedTankId(null);}} style={{cursor:'pointer'}}>
+                      {isSel && <circle cx={s.x} cy={s.y} r="11" fill="none" stroke="#3498db" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
+                      <LowPolyShip x={s.x} y={s.y} tier={s.tier} rotation={s.rotation} owner={s.owner} scale={isSel?1.08:1}/>
+                      <g transform={`translate(${s.x} ${s.y+9})`}>
+                        <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
+                        <rect x="-7.5" y="0.4" width={`${15 * (s.hp/s.maxHp)}`} height="1.7" rx="0.8" fill={s.hp/s.maxHp>0.5 ? '#3498db' : s.hp/s.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
                       </g>
                     </g>
                   )
@@ -778,6 +865,37 @@ export default function App(){
                           </div>
                         )}
                         {selectedTankId && (()=>{ const tt=tanks.find(x=>x.id===selectedTankId); if(!tt) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(241,196,15,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(241,196,15,0.4)'}}><b>Kiválasztva: Tank T{tt.tier}</b> — kattints ellenséges városra! <button className="btn ghost small" onClick={()=> setSelectedTankId(null)}>Mégse</button></div>})()}
+                      </div>
+                      <div className="panel ship-factory" style={{marginTop:10, background:'#0a1e33', border:'2px solid #1e4a6e', borderRadius:10, padding:10}}>
+                        <h4 style={{margin:'0 0 6px 0', fontSize:13}}>🚢 Hajó Flotta — növekvő sorrend (vízen gyors + tech)</h4>
+                        <p className="muted" style={{fontSize:11}}>H1 járőr → H4 csatahajó: egyre erősebb & gyorsabb vízen. Tech bónusz most is él!</p>
+                        <div className="ship-grid" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                          {SHIP_TIERS.map(s=>{
+                            const stats = getShipStats(s.tier, techBonuses)
+                            const canAfford = resources.money >= stats.costMoney && resources.manpower >= stats.costManpower
+                            return (
+                              <div key={s.tier} className="ship-card" style={{background:'#0c253e', border:'1.5px solid #1e4a6e', borderRadius:8, padding:8, textAlign:'center'}}>
+                                <div style={{fontWeight:900, fontSize:12}}>{s.icon} H{s.tier} {s.name}</div>
+                                <div style={{fontSize:11, color:'#8ab4d0'}}>{stats.damage} dmg • {stats.speed} spd • {stats.hp} HP</div>
+                                <div style={{fontSize:10, background:'rgba(0,0,0,0.25)', padding:'3px', borderRadius:6, margin:'4px 0'}}>{formatMoney(stats.costMoney)}<br/>{formatManpower(stats.costManpower)} • {stats.buildTime}s</div>
+                                {(stats.dmgMult!=='1.00' || stats.speedMult!=='1.00') && <div style={{fontSize:9, color:'#3498db', fontWeight:800}}>Tech: ×{stats.dmgMult} • ×{stats.speedMult}</div>}
+                                <button className="btn primary small" style={{background:'#2980b9', borderColor:'#1a4a6e', width:'100%', marginTop:6}} disabled={!canAfford || shipQueue.length>=3} onClick={()=> orderShip(s.tier, selectedCity)}>Vízre bocsátás</button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {shipQueue.length>0 && (
+                          <div style={{marginTop:8}}>
+                            <div style={{fontSize:11, fontWeight:800}}>Flotta sor: {shipQueue.length}/3</div>
+                            {shipQueue.filter(q=> q.cityId===selectedCity.id).map(q=> (
+                              <div key={q.id} style={{background:'rgba(0,40,80,0.3)', borderRadius:6, padding:6, marginTop:4, fontSize:11}}>
+                                <div style={{display:'flex', justifyContent:'space-between'}}><b>{q.name} H{q.tier}</b><span>{q.progress.toFixed(1)}/{q.max}s</span></div>
+                                <div className="progress" style={{height:6, margin:'4px 0'}}><div className="fill" style={{width:`${(q.progress/q.max)*100}%`, background:'#3498db'}}></div></div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedShipId && (()=>{ const ss=ships.find(x=>x.id===selectedShipId); if(!ss) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(52,152,219,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(52,152,219,0.4)'}}><b>Kiválasztva: Hajó H{ss.tier}</b> — kattints tengerparti városra! <button className="btn ghost small" onClick={()=> setSelectedShipId(null)}>Mégse</button></div>})()}
                       </div>
                     </>
                   ) : (
