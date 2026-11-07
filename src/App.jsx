@@ -3,6 +3,8 @@ import { COUNTRIES, COUNTRY_POLYGONS } from './europeData.js'
 import LowPolySoldier from './LowPolySoldier.jsx'
 import TechTree from './TechTree.jsx'
 import { calcTechBonuses, TECH_COSTS } from './techData.js'
+import { TANK_TIERS, getTankStats } from './tankData.js'
+import LowPolyTank from './LowPolyTank.jsx'
 import './App.css'
 
 const STORAGE_SERVERS = 'tf_servers_v2'
@@ -84,6 +86,9 @@ export default function App(){
   const [floatingDamages, setFloatingDamages] = useState([])
   const [techLevels, setTechLevels] = useState({ soldier:0, tank:0, economy:0, political:0 })
   const [showTech, setShowTech] = useState(false)
+  const [tanks, setTanks] = useState([]) // {id, tier, x,y, targetX,targetY, owner, hp, rotation}
+  const [tankQueue, setTankQueue] = useState([]) // {id, tier, cityId, progress, max}
+  const [selectedTankId, setSelectedTankId] = useState(null)
   const tickRef = useRef(null)
   const techBonuses = calcTechBonuses(techLevels)
 
@@ -161,6 +166,7 @@ export default function App(){
     setDivisions(divs)
     pushNotif(`Beléptél mint ${country.name} — főváros: ${country.capital} — sok sikert, ${playerName}!`, 'ok')
     addTicker(`BREAKING NEWS: ${country.name} just joined ${currentServer?.name || 'EU Hadszíntér #1'}`)
+    setTanks([]); setTankQueue([]); setSelectedTankId(null)
   }
 
   // Game loop
@@ -252,6 +258,67 @@ export default function App(){
         }
         return {...cw, timer: nt}
       })
+      // TANK QUEUE progress
+      setTankQueue(q=>{
+        if(q.length===0) return q
+        const tb = calcTechBonuses(techLevels)
+        const speedBoost = 1 + tb.armySpawnSpeed/100 // tech also helps tank build
+        let newQ = q.map(item=> ({...item, progress: item.progress + 0.1 * speedBoost}))
+        const finished = newQ.filter(i=> i.progress >= i.max)
+        const remaining = newQ.filter(i=> i.progress < i.max)
+        if(finished.length){
+          finished.forEach(f=>{
+            const tier = f.tier
+            const city = cities.find(c=> c.id===f.cityId)
+            if(city){
+              const stats = getTankStats(tier, calcTechBonuses(techLevels))
+              setTanks(t=> [...t, {
+                id:`tank-${Date.now()}-${Math.random()}`,
+                tier, x: city.x + (Math.random()*10-5), y: city.y + 8 + Math.random()*6,
+                targetX: city.x, targetY: city.y, owner:'player', hp: stats.hp, maxHp: stats.hp, rotation: 0, stats
+              }])
+              pushNotif(`Tank kész: ${stats.name} (${tier}) — ${city.name}-ban!`, 'ok')
+              addTicker(`Tank gyártás: ${stats.name} kész ${city.name}-ban`)
+            }
+          })
+        }
+        return remaining
+      })
+      // TANK MOVEMENT
+      setTanks(ts=> ts.map(t=>{
+        const dx = t.targetX - t.x
+        const dy = t.targetY - t.y
+        const dist = Math.sqrt(dx*dx + dy*dy)
+        if(dist < 1.5) return {...t, rotation: t.rotation}
+        const stats = getTankStats(t.tier, calcTechBonuses(techLevels))
+        const step = stats.speed * 0.1 // per 100ms
+        const nx = t.x + (dx/dist)* Math.min(step, dist)
+        const ny = t.y + (dy/dist)* Math.min(step, dist)
+        const angle = Math.atan2(dy,dx)*180/Math.PI
+        // simple wiggle for ratyi low poly
+        const jig = Math.sin(Date.now()/120 + t.x)*0.6
+        return {...t, x: nx, y: ny+jig*0.15, rotation: angle, stats}
+      }))
+      // TANK COMBAT: if tank reaches enemy city, assist capture
+      // check tanks near enemy cities
+      tanks.forEach(t=>{
+        if(t.owner!=='player') return
+        const enemyCities = cities.filter(c=> owners[c.id] && owners[c.id]!=='player')
+        for(const ec of enemyCities){
+          const d = Math.hypot(t.x - ec.x, t.y - ec.y)
+          if(d < 10 && !captureWar && !war){
+            // auto assist: tank deals damage to city defense
+            // we simulate by creating floating damage
+            if(Math.random()<0.08){
+              const dmg = Math.floor(t.stats.damage * (0.8+Math.random()*0.4))
+              const id = Date.now()+Math.random()
+              setFloatingDamages(f=> [...f, {id, x: ec.x, y: ec.y, val: `-${dmg} 🚛`, color:'#ff7f50'}])
+              setTimeout(()=> setFloatingDamages(f=> f.filter(x=>x.id!==id)), 900)
+            }
+          }
+        }
+      })
+
       // random bot ticker
       if(Math.random()<0.006 && bots.length){
         const att = bots[Math.floor(Math.random()*bots.length)]
@@ -260,7 +327,7 @@ export default function App(){
       }
     }, 100)
     return ()=> clearInterval(tickRef.current)
-  }, [view, cities, owners, bots, myCountryId, resources.manpower])
+  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, captureWar, war])
 
   function startWar(targetCity){
     if(war || captureWar) return pushNotif('Már folyamatban van egy hadművelet!', 'warn')
@@ -314,6 +381,19 @@ export default function App(){
     const branchNames = { soldier:'Gyalogság', tank:'Páncélos', economy:'Gazdaság', political:'Politika' }
     pushNotif(`Kutatás kész: ${branchNames[branch]} ${['I','II','III','IV'][lvl]} → ${['I','II','III','IV'][lvl+1]||'MAX'}!`, 'ok')
     addTicker(`Kutatás: ${branchNames[branch]} ${['I','II','III','IV'][lvl+1]} szint elérve — ${playerName}`)
+  }
+  function orderTank(tier, city){
+    if(owners[city.id]!=='player') return pushNotif('Csak saját városban gyárthatsz tankot!','warn')
+    const stats = getTankStats(tier, techBonuses)
+    if(resources.money < stats.costMoney || resources.manpower < stats.costManpower) return pushNotif(`Nincs elég erőforrás: ${formatMoney(stats.costMoney)} + ${formatManpower(stats.costManpower)}`, 'warn')
+    if(tankQueue.length>=3) return pushNotif('Tank sor tele! Max 3 várakozó.', 'warn')
+    setResources(r=> ({...r, money: r.money - stats.costMoney, manpower: r.manpower - stats.costManpower}))
+    setTankQueue(q=> [...q, { id:`q-${Date.now()}-${Math.random()}`, tier, cityId: city.id, progress:0, max: stats.buildTime, name: stats.name }])
+    pushNotif(`Tank gyártás: ${stats.name} T${tier} → ${city.name} (${stats.buildTime}s)`, 'info')
+  }
+  function moveTankTo(tankId, targetCity){
+    setTanks(ts=> ts.map(t=> t.id===tankId ? {...t, targetX: targetCity.x + (Math.random()*8-4), targetY: targetCity.y + (Math.random()*8-4)} : t))
+    pushNotif(`Tank parancs: mozgas ${targetCity.name}-ba`, 'info')
   }
   function upgradeEconomySingle(city){
     if(owners[city.id]!=='player') return pushNotif('Csak saját várost fejleszthetsz!','warn')
@@ -495,54 +575,95 @@ export default function App(){
                 <g opacity="0.15">
                   {Array.from({length:40},(_,i)=> <path key={i} d={`M${(i*37)%700} ${(i*53)%520} l${6+ i%6} ${8+ i%5} l${-10} -3 Z`} fill={i%2? '#1a3a66':'#0f274d'} />)}
                 </g>
-                {/* countries low poly */}
+                {/* countries low poly - színes mint a képen */}
                 {COUNTRIES.map(c=>{
                   const isMine = c.id===myCountryId || cities.some(city=> city.countryId===c.id && owners[city.id]==='player')
                   const isBot = bots.some(b=> b.countryId===c.id)
-                  const ownerType = isMine ? 'own' : isBot ? 'enemy' : 'neutral'
+                  const isSelectedCountry = myCountryId===c.id
+                  const baseColor = c.color
                   const path = COUNTRY_POLYGONS[c.id]
+                  // ownership overlay: saját = élénk + zöld border, ellenség = sötétebb + piros border
+                  let stroke = '#000'
+                  let strokeW = 1.6
+                  if(isMine) { stroke = '#0f5a2a'; strokeW=2.4 }
+                  else if(isBot) { stroke = '#6b1a1a'; strokeW=1.8 }
                   return (
                     <g key={c.id}>
-                      <path d={path} className={`country ${ownerType}`} />
-                      {/* low poly facet overlay - extra triangles inside for ratyi effect */}
-                      {isMine && <path d={path} fill="none" stroke="rgba(0,0,0,0.15)" strokeWidth="0.6" strokeDasharray="2 3" />}
+                      <path d={path} fill={baseColor} stroke={stroke} strokeWidth={strokeW} opacity={isSelectedCountry?1: isMine?0.95: isBot?0.92:0.88} style={{filter:'drop-shadow(1px 1px 0 rgba(0,0,0,0.4))'}} />
+                      {/* extra low poly facet - ratyi háromszögek */}
+                      <path d={path} fill="none" stroke="rgba(0,0,0,0.08)" strokeWidth="0.5" strokeDasharray="2 2" />
+                      {/* country flag dot like image */}
+                      {isBot && <circle cx={c.x} cy={c.y+8} r="2" fill={c.color} stroke="#000" strokeWidth="0.5"/>}
                       <text x={c.x} y={c.y-17} textAnchor="middle" className="country-label">{c.code}</text>
+                      {isMine && <text x={c.x} y={c.y+9} textAnchor="middle" fontSize="5.5" fill="#0f5a2a" stroke="#fff" strokeWidth="0.3" fontWeight="900">⬢</text>}
                     </g>
                   )
                 })}
-                {/* cities - low poly dots with extrude */}
+                {/* cities - low poly fehér pötty / csillag mint a képen */}
                 {cities.map(city=>{
                   const owner = owners[city.id]
                   const isOwn = owner==='player'
                   const isSelected = selectedCityId===city.id
                   const isMulti = multiSelect.includes(city.id)
-                  const cls = isOwn ? 'own' : owner ? 'enemy' : 'neutral'
+                  const isEnemy = owner && !isOwn
+                  // low poly city: fehér pötty, főváros csillag, mint screenshot
+                  let cityFill = '#fff'
+                  let cityStroke = '#000'
+                  if(isOwn) { cityFill='#fff'; cityStroke='#27ae60' }
+                  else if(isEnemy) { cityFill='#e0e0e0'; cityStroke='#c0392b' }
+                  const handleClick = (e)=>{
+                    if(selectedTankId){
+                      const tank = tanks.find(t=> t.id===selectedTankId)
+                      if(tank) { moveTankTo(selectedTankId, city); setSelectedTankId(null); return }
+                    }
+                    if(e.ctrlKey || e.metaKey){ if(!isOwn) return pushNotif('Csak saját területet jelölhetsz!','warn'); setMultiSelect(m=> m.includes(city.id) ? m.filter(x=>x!==city.id) : [...m, city.id]); return}
+                    setSelectedCityId(city.id)
+                  }
+                  const isCapital = city.id.endsWith('-0')
                   return (
-                    <g key={city.id} className="city-group" onClick={(e)=>{
-                      if(e.ctrlKey || e.metaKey){ if(!isOwn) return pushNotif('Csak saját területet jelölhetsz!','warn'); setMultiSelect(m=> m.includes(city.id) ? m.filter(x=>x!==city.id) : [...m, city.id]); return}
-                      setSelectedCityId(city.id)
-                    }}>
+                    <g key={city.id} className="city-group" onClick={handleClick} style={{cursor:'pointer'}}>
                       {/* drop shadow */}
-                      <ellipse cx={city.x+1} cy={city.y+1.5} rx="5.5" ry="2.2" fill="rgba(0,0,0,0.35)" />
-                      <circle cx={city.x} cy={city.y} r={isSelected? 7:5.2} className={`city ${cls} ${isSelected?'selected':''} ${isMulti?'multi':''}`} filter="url(#blockShadow)" />
-                      {city.countryId===myCountryId && city.id.endsWith('-0') && <text x={city.x} y={city.y-7} textAnchor="middle" fontSize="6" fill="#f1c40f" stroke="#000" strokeWidth="0.4">★</text>}
-                      <text x={city.x} y={city.y+20} textAnchor="middle" className="city-label">{city.name}</text>
+                      <ellipse cx={city.x+0.8} cy={city.y+1.2} rx="4.5" ry="1.8" fill="rgba(0,0,0,0.35)" />
+                      {isCapital ? (
+                        <>
+                          <text x={city.x} y={city.y} textAnchor="middle" dominantBaseline="middle" fontSize={isSelected?9:8} fill={isOwn?'#f1c40f':'#fff'} stroke="#000" strokeWidth="0.6" style={{filter:'drop-shadow(1px 1px 0 rgba(0,0,0,0.5))'}}>{isOwn?'★':'☆'}</text>
+                          {isSelected && <circle cx={city.x} cy={city.y} r="8" fill="none" stroke="#f1c40f" strokeWidth="1.2" strokeDasharray="2 1.5" opacity="0.9"/>}
+                        </>
+                      ) : (
+                        <circle cx={city.x} cy={city.y} r={isSelected? 5:3.2} fill={cityFill} stroke={cityStroke} strokeWidth={isSelected?1.4:0.8} opacity="0.95" style={{filter:'drop-shadow(0.5px 0.5px 0 rgba(0,0,0,0.4))'}} />
+                      )}
+                      {isMulti && <circle cx={city.x} cy={city.y} r={isCapital?9:6} fill="none" stroke="#3498db" strokeWidth="1.4" strokeDasharray="3 2"/>}
+                      <text x={city.x} y={city.y+16} textAnchor="middle" className="city-label">{city.name}</text>
                       <text x={city.x} y={city.y-8} textAnchor="middle" className="city-level">{city.defense}🛡 {city.economy}💰</text>
+                      {/* tiny flag for own cities like screenshot */}
+                      {isOwn && <g transform={`translate(${city.x+6} ${city.y-6})`}><rect x="0" y="-3" width="6" height="3" fill={COUNTRIES.find(c=>c.id===city.countryId)?.color || '#2ecc71'} stroke="#000" strokeWidth="0.4"/><line x1="0" y1="-3" x2="0" y2="3" stroke="#000" strokeWidth="0.5"/></g>}
                     </g>
                   )
                 })}
                 {/* LOW POLY SOLDIERS - divíziók sorfalban */}
                 {divisions.map(d=>{
-                  // only show if city visible and division near city border
                   return (
-                    <g key={d.id} opacity="0.98">
+                    <g key={d.id} opacity="0.98" onClick={()=> setSelectedCityId(d.cityId)} style={{cursor:'pointer'}}>
                       <LowPolySoldier x={d.x} y={d.y} scale={0.9 + (d.amount>90000?0.15:0)} variant={d.owner==='player'?0:1} />
-                      {/* 100.00k zászló mint videóban */}
                       <g transform={`translate(${d.x} ${d.y-10})`}>
                         <rect x="-14" y="-4" width="28" height="6" rx="1.5" fill={d.owner==='player' ? '#c0392b':'#2c3e50'} stroke="#000" strokeWidth="0.6" />
                         <text x="0" y="0.5" textAnchor="middle" className="division-flag">{(d.amount/1000).toFixed(2)}k</text>
-                        {/* tiny flag */}
                         <rect x="-16" y="-4" width="3" height="4" fill={d.owner==='player'? '#e74c3c':'#3498db'} stroke="#000" strokeWidth="0.4"/>
+                      </g>
+                    </g>
+                  )
+                })}
+                {/* TANKS - low poly harckocsik, növekvő erő + tech */}
+                {tanks.map(t=>{
+                  const isSel = selectedTankId===t.id
+                  return (
+                    <g key={t.id} onClick={(e)=>{ e.stopPropagation(); setSelectedTankId(t.id);}} style={{cursor:'pointer'}}>
+                      {isSel && <circle cx={t.x} cy={t.y} r="10" fill="none" stroke="#f1c40f" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
+                      <LowPolyTank x={t.x} y={t.y} tier={t.tier} rotation={t.rotation} owner={t.owner} scale={isSel?1.08:1}/>
+                      {/* hp bar */}
+                      <g transform={`translate(${t.x} ${t.y+9})`}>
+                        <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
+                        <rect x="-7.5" y="0.4" width={`${15 * (t.hp/t.maxHp)}`} height="1.7" rx="0.8" fill={t.hp/t.maxHp>0.5 ? '#2ecc71' : t.hp/t.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
                       </g>
                     </g>
                   )
@@ -607,6 +728,7 @@ export default function App(){
                     <div>Divíziók itt: <b>{divisions.filter(d=> d.cityId===selectedCity.id).length} × 100k</b></div>
                   </div>
                   {owners[selectedCity.id]==='player' ? (
+                    <>
                     <div className="upgrade-grid">
                       <div className="upgrade-card">
                         <h4>🛡️ Védelem — low poly erőd</h4>
@@ -626,15 +748,48 @@ export default function App(){
                         </div>
                       </div>
                     </div>
+                    <div className="panel tank-factory" style={{marginTop:10, background:'#0f223a', border:'2px solid #1e3a5e', borderRadius:10, padding:10}}>
+                        <h4 style={{margin:'0 0 6px 0', fontSize:13}}>🚛 Tank Gyár — növekvő sorrend (erő + sebesség + tech)</h4>
+                        <p className="muted" style={{fontSize:11}}>T1 könnyű → T4 szupernehéz: egyre erősebb & gyorsabb. Tech +10% dmg / +18% speed rátesz!</p>
+                        <div className="tank-grid" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                          {TANK_TIERS.map(t=>{
+                            const stats = getTankStats(t.tier, techBonuses)
+                            const canAfford = resources.money >= stats.costMoney && resources.manpower >= stats.costManpower
+                            return (
+                              <div key={t.tier} className="tank-card" style={{background:'#0c1b33', border:'1.5px solid #1e335c', borderRadius:8, padding:8, textAlign:'center'}}>
+                                <div style={{fontWeight:900, fontSize:12}}>{t.icon} T{t.tier} {t.name}</div>
+                                <div style={{fontSize:11, color:'#8aa0c0'}}>{stats.damage} dmg • {stats.speed} spd • {stats.hp} HP</div>
+                                <div style={{fontSize:10, background:'rgba(0,0,0,0.25)', padding:'3px', borderRadius:6, margin:'4px 0'}}>{formatMoney(stats.costMoney)}<br/>{formatManpower(stats.costManpower)} • {stats.buildTime}s</div>
+                                {(stats.dmgMult!=='1.00' || stats.speedMult!=='1.00') && <div style={{fontSize:9, color:'#2ecc71', fontWeight:800}}>Tech: ×{stats.dmgMult} • ×{stats.speedMult}</div>}
+                                <button className="btn primary small" disabled={!canAfford || tankQueue.length>=3} onClick={()=> orderTank(t.tier, selectedCity)} style={{marginTop:6, width:'100%'}}>Gyártás</button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {tankQueue.length>0 && (
+                          <div style={{marginTop:8}}>
+                            <div style={{fontSize:11, fontWeight:800}}>Sor: {tankQueue.length}/3</div>
+                            {tankQueue.filter(q=> q.cityId===selectedCity.id).map(q=> (
+                              <div key={q.id} style={{background:'rgba(0,0,0,0.3)', borderRadius:6, padding:6, marginTop:4, fontSize:11}}>
+                                <div style={{display:'flex', justifyContent:'space-between'}}><b>{q.name} T{q.tier}</b><span>{q.progress.toFixed(1)}/{q.max}s</span></div>
+                                <div className="progress" style={{height:6, margin:'4px 0'}}><div className="fill" style={{width:`${(q.progress/q.max)*100}%`}}></div></div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedTankId && (()=>{ const tt=tanks.find(x=>x.id===selectedTankId); if(!tt) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(241,196,15,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(241,196,15,0.4)'}}><b>Kiválasztva: Tank T{tt.tier}</b> — kattints ellenséges városra! <button className="btn ghost small" onClick={()=> setSelectedTankId(null)}>Mégse</button></div>})()}
+                      </div>
+                    </>
                   ) : (
                     <div className="attack-box">
-                      <p>Ellenséges low poly város — küldd rá a blokk katonáidat!</p>
+                      <p>Ellenséges low poly város — küldd rá a blokk katonáidat és tankjaidat!</p>
                       <div className="cost">Költség: <b>50 PP</b> + ostrom manpower • Idő: {warsDone===0?'10s':'30s'} + megerősítés</div>
                       <button className="btn primary big" disabled={!!war || !!captureWar || resources.pp<50} onClick={()=> startWar(selectedCity)}>⚔️ Háború indítása — {cities.find(c=>c.id===selectedCity.id)?.name}</button>
                       {resources.pp<50 && <p className="warn">Nincs elég PP! ({Math.floor(resources.pp)}/50)</p>}
+                      {tanks.length>0 && <div style={{marginTop:8, fontSize:11}}><b>{tanks.length} tankod van</b> — válassz egyet a térképen és kattints ide! {selectedTankId? '✅ kiválasztva' : ''}</div>}
                     </div>
                   )}
-                  <div className="city-tip"><b>Low poly tipp:</b> A katonák direkt szögletesek, kicsit ratyik, de pont ezért szerethetők — mint Robloxban!</div>
+                  <div className="city-tip"><b>Low poly tipp:</b> T1→T4 egyre erősebb & gyorsabb + tech +18% speed! Tankok gurulnak, katonák sorfalban — kicsit ratyi de szerethető.</div>
                 </>
               ) : (<p className="muted">Válassz egy várost a térképen!</p>)}
             </div>
