@@ -658,7 +658,6 @@ export default function App(){
               addTicker(`Újjáépülés: kráter ${cr.radius.toFixed(0)}px helyreállt — béke 2 hónap!`)
             })
             setCraters(cr=> cr.filter(c=> !rebuildable.find(r=> r.id===c.id)))
-            setLastWarEnd(new Date(gameDate))
           }
         }
       }
