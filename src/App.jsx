@@ -9,6 +9,8 @@ import { SHIP_TIERS, getShipStats } from './shipData.js'
 import LowPolyShip from './LowPolyShip.jsx'
 import { PLANE_TIERS, getPlaneStats } from './planeData.js'
 import LowPolyPlane from './LowPolyPlane.jsx'
+import { AA_TIERS, getAAStats } from './aaData.js'
+import LowPolyAntiAir from './LowPolyAntiAir.jsx'
 import './App.css'
 
 const STORAGE_SERVERS = 'tf_servers_v2'
@@ -99,6 +101,9 @@ export default function App(){
   const [planes, setPlanes] = useState([]) // repülők
   const [planeQueue, setPlaneQueue] = useState([])
   const [selectedPlaneId, setSelectedPlaneId] = useState(null)
+  const [aas, setAAs] = useState([]) // anti-air
+  const [aaQueue, setAAQueue] = useState([])
+  const [selectedAAId, setSelectedAAId] = useState(null)
   const tickRef = useRef(null)
   const techBonuses = calcTechBonuses(techLevels)
 
@@ -176,7 +181,7 @@ export default function App(){
     setDivisions(divs)
     pushNotif(`Beléptél mint ${country.name} — főváros: ${country.capital} — sok sikert, ${playerName}!`, 'ok')
     addTicker(`BREAKING NEWS: ${country.name} just joined ${currentServer?.name || 'EU Hadszíntér #1'}`)
-    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null); setPlanes([]); setPlaneQueue([]); setSelectedPlaneId(null)
+    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null); setPlanes([]); setPlaneQueue([]); setSelectedPlaneId(null); setAAs([]); setAAQueue([]); setSelectedAAId(null)
   }
 
   // Game loop
@@ -435,6 +440,70 @@ export default function App(){
           }
         }
       })
+      // AA QUEUE - anti-aircraft, lassabb de védő
+      setAAQueue(q=>{
+        if(q.length===0) return q
+        const tb = calcTechBonuses(techLevels)
+        const speedBoost = 1 + tb.armySpawnSpeed/100
+        let newQ = q.map(item=> ({...item, progress: item.progress + 0.1 * speedBoost}))
+        const finished = newQ.filter(i=> i.progress >= i.max)
+        const remaining = newQ.filter(i=> i.progress < i.max)
+        if(finished.length){
+          finished.forEach(f=>{
+            const tier = f.tier
+            const city = cities.find(c=> c.id===f.cityId)
+            if(city){
+              const stats = getAAStats(tier, calcTechBonuses(techLevels))
+              setAAs(a=> [...a, {
+                id:`aa-${Date.now()}-${Math.random()}`,
+                tier, x: city.x -6 + Math.random()*12, y: city.y + 6 + Math.random()*6,
+                targetX: city.x -6 + Math.random()*12, targetY: city.y + 6 + Math.random()*6, owner:'player', hp: stats.hp, maxHp: stats.hp, rotation: 0, stats
+              }])
+              pushNotif(`Légvédelem kész: ${stats.name} A${tier} — ${city.name}! 🎯`, 'ok')
+              addTicker(`Légvédelem: ${stats.name} telepítve ${city.name}-ban`)
+            }
+          })
+        }
+        return remaining
+      })
+      // AA MOVEMENT - lassabb, védő pozíció
+      setAAs(aa=> aa.map(a=>{
+        const dx = a.targetX - a.x
+        const dy = a.targetY - a.y
+        const dist = Math.sqrt(dx*dx + dy*dy)
+        if(dist < 1) return a
+        const stats = getAAStats(a.tier, calcTechBonuses(techLevels))
+        const step = (stats.range/4 + 5) * 0.06 // lassabb mozgás, de tech hat rá
+        const nx = a.x + (dx/dist)* Math.min(step, dist)
+        const ny = a.y + (dy/dist)* Math.min(step, dist)
+        const angle = Math.atan2(dy,dx)*180/Math.PI
+        return {...a, x: nx, y: ny, rotation: angle*0.3, stats}
+      }))
+      // AA vs PLANES - auto intercepts enemy planes
+      aas.forEach(aa=>{
+        if(aa.owner!=='player') return
+        for(const pl of planes){
+          if(pl.owner==='player') continue
+          const d = Math.hypot(aa.x - pl.x, aa.y - pl.y)
+          if(d < aa.stats.range){
+            if(Math.random()<0.12){
+              const dmg = Math.floor(aa.stats.damage * (0.7+Math.random()*0.4))
+              const id = Date.now()+Math.random()
+              setFloatingDamages(f=> [...f, {id, x: pl.x, y: pl.y-4, val: `-${dmg} 🎯`, color:'#27ae60'}])
+              setTimeout(()=> setFloatingDamages(f=> f.filter(x=>x.id!==id)), 800)
+              // damage plane
+              setPlanes(ps=> ps.map(p=> p.id===pl.id ? {...p, hp: Math.max(0, p.hp - dmg)} : p))
+              if(pl.hp - dmg <=0){
+                pushNotif(`Légvédelem lelőtt egy ellenséges repülőt!`, 'ok')
+                setPlanes(ps=> ps.filter(p=> p.id!==pl.id))
+              }
+            }
+          }
+        }
+        for(const pl of planes.filter(p=> p.owner==='player')) continue
+      })
+      // cleanup dead planes
+      setPlanes(ps=> ps.filter(p=> p.hp>0))
 
       // random bot ticker
       if(Math.random()<0.006 && bots.length){
@@ -444,7 +513,7 @@ export default function App(){
       }
     }, 100)
     return ()=> clearInterval(tickRef.current)
-  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, ships, planes, captureWar, war])
+  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, ships, planes, aas, captureWar, war])
 
   function startWar(targetCity){
     if(war || captureWar) return pushNotif('Már folyamatban van egy hadművelet!', 'warn')
@@ -533,6 +602,19 @@ export default function App(){
   function movePlaneTo(planeId, targetCity){
     setPlanes(ps=> ps.map(p=> p.id===planeId ? {...p, targetX: targetCity.x + (Math.random()*8-4), targetY: targetCity.y -12 + (Math.random()*6-3)} : p))
     pushNotif(`Repülő parancs: ${targetCity.name} fölé!`, 'info')
+  }
+  function orderAA(tier, city){
+    if(owners[city.id]!=='player') return pushNotif('Csak saját városban telepíthetsz légvédelmet!','warn')
+    const stats = getAAStats(tier, techBonuses)
+    if(resources.money < stats.costMoney || resources.manpower < stats.costManpower) return pushNotif(`Nincs elég erőforrás: ${formatMoney(stats.costMoney)} + ${formatManpower(stats.costManpower)}`, 'warn')
+    if(aaQueue.length>=3) return pushNotif('AA sor tele! Max 3.', 'warn')
+    setResources(r=> ({...r, money: r.money - stats.costMoney, manpower: r.manpower - stats.costManpower}))
+    setAAQueue(q=> [...q, { id:`aaq-${Date.now()}-${Math.random()}`, tier, cityId: city.id, progress:0, max: stats.buildTime, name: stats.name }])
+    pushNotif(`Légvédelem: ${stats.name} A${tier} → ${city.name} (${stats.buildTime}s) 🎯`, 'info')
+  }
+  function moveAATo(aaId, targetCity){
+    setAAs(aa=> aa.map(a=> a.id===aaId ? {...a, targetX: targetCity.x + (Math.random()*10-5), targetY: targetCity.y + 6 + Math.random()*5} : a))
+    pushNotif(`AA parancs: ${targetCity.name}-ba telepítés`, 'info')
   }
   function moveShipTo(shipId, targetCity){
     setShips(ss=> ss.map(s=> s.id===shipId ? {...s, targetX: targetCity.x + (Math.random()*12-6), targetY: targetCity.y + (Math.random()*8-4)} : s))
@@ -767,6 +849,10 @@ export default function App(){
                       const plane = planes.find(pp=> pp.id===selectedPlaneId)
                       if(plane) { movePlaneTo(selectedPlaneId, city); setSelectedPlaneId(null); return }
                     }
+                    if(selectedAAId){
+                      const aa = aas.find(a=> a.id===selectedAAId)
+                      if(aa) { moveAATo(selectedAAId, city); setSelectedAAId(null); return }
+                    }
                     if(e.ctrlKey || e.metaKey){ if(!isOwn) return pushNotif('Csak saját területet jelölhetsz!','warn'); setMultiSelect(m=> m.includes(city.id) ? m.filter(x=>x!==city.id) : [...m, city.id]); return}
                     setSelectedCityId(city.id)
                   }
@@ -836,13 +922,29 @@ export default function App(){
                 {planes.map(pl=>{
                   const isSel = selectedPlaneId===pl.id
                   return (
-                    <g key={pl.id} onClick={(e)=>{ e.stopPropagation(); setSelectedPlaneId(pl.id); setSelectedTankId(null); setSelectedShipId(null);}} style={{cursor:'pointer'}}>
+                    <g key={pl.id} onClick={(e)=>{ e.stopPropagation(); setSelectedPlaneId(pl.id); setSelectedTankId(null); setSelectedShipId(null); setSelectedAAId(null);}} style={{cursor:'pointer'}}>
                       {isSel && <circle cx={pl.x} cy={pl.y} r="10" fill="none" stroke="#a29bfe" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
                       <LowPolyPlane x={pl.x} y={pl.y} tier={pl.tier} rotation={pl.rotation} owner={pl.owner} scale={isSel?1.08:1}/>
                       <g transform={`translate(${pl.x} ${pl.y+8})`}>
                         <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
                         <rect x="-7.5" y="0.4" width={`${15 * (pl.hp/pl.maxHp)}`} height="1.7" rx="0.8" fill={pl.hp/pl.maxHp>0.5 ? '#a29bfe' : pl.hp/pl.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
                       </g>
+                    </g>
+                  )
+                })}
+                {/* ANTI-AIR - légvédelem */}
+                {aas.map(aa=>{
+                  const isSel = selectedAAId===aa.id
+                  return (
+                    <g key={aa.id} onClick={(e)=>{ e.stopPropagation(); setSelectedAAId(aa.id); setSelectedTankId(null); setSelectedShipId(null); setSelectedPlaneId(null);}} style={{cursor:'pointer'}}>
+                      {isSel && <circle cx={aa.x} cy={aa.y} r="10" fill="none" stroke="#27ae60" strokeWidth="1.5" strokeDasharray="3 2" opacity="0.9"/>}
+                      <LowPolyAntiAir x={aa.x} y={aa.y} tier={aa.tier} rotation={aa.rotation} owner={aa.owner} scale={isSel?1.08:1}/>
+                      <g transform={`translate(${aa.x} ${aa.y+9})`}>
+                        <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
+                        <rect x="-7.5" y="0.4" width={`${15 * (aa.hp/aa.maxHp)}`} height="1.7" rx="0.8" fill={aa.hp/aa.maxHp>0.5 ? '#27ae60' : aa.hp/aa.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
+                      </g>
+                      {/* range circle when selected */}
+                      {isSel && <circle cx={aa.x} cy={aa.y} r={aa.stats.range*3} fill="rgba(46,204,113,0.08)" stroke="rgba(46,204,113,0.4)" strokeWidth="0.8" strokeDasharray="3 3"/>}
                     </g>
                   )
                 })}
@@ -1018,6 +1120,37 @@ export default function App(){
                           </div>
                         )}
                         {selectedPlaneId && (()=>{ const pp=planes.find(x=>x.id===selectedPlaneId); if(!pp) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(162,155,254,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(162,155,254,0.4)'}}><b>Kiválasztva: Repülő R{pp.tier}</b> — kattints városra bombázni! <button className="btn ghost small" onClick={()=> setSelectedPlaneId(null)}>Mégse</button></div>})()}
+                      </div>
+                      <div className="panel aa-factory" style={{marginTop:10, background:'#0e1f0e', border:'2px solid #27ae60', borderRadius:10, padding:10}}>
+                        <h4 style={{margin:'0 0 6px 0', fontSize:13}}>🎯 Légvédelem — anti-aircraft (repülő ellen)</h4>
+                        <p className="muted" style={{fontSize:11}}>A1 üteg → A4 Iron Dome: egyre erősebb & nagyobb hatósugár. Tech boostol!</p>
+                        <div className="aa-grid" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                          {AA_TIERS.map(a=>{
+                            const stats = getAAStats(a.tier, techBonuses)
+                            const canAfford = resources.money >= stats.costMoney && resources.manpower >= stats.costManpower
+                            return (
+                              <div key={a.tier} className="aa-card" style={{background:'#0e2a0e', border:'1.5px solid #27ae60', borderRadius:8, padding:8, textAlign:'center'}}>
+                                <div style={{fontWeight:900, fontSize:12}}>{a.icon} A{a.tier} {a.name}</div>
+                                <div style={{fontSize:11, color:'#a0c0a0'}}>{stats.damage} dmg • {stats.range} rng • {stats.hp} HP</div>
+                                <div style={{fontSize:10, background:'rgba(0,0,0,0.25)', padding:'3px', borderRadius:6, margin:'4px 0'}}>{formatMoney(stats.costMoney)}<br/>{formatManpower(stats.costManpower)} • {stats.buildTime}s</div>
+                                {(stats.dmgMult!=='1.00' || stats.rangeMult!=='1.00') && <div style={{fontSize:9, color:'#2ecc71', fontWeight:800}}>Tech: ×{stats.dmgMult} • ×{stats.rangeMult}</div>}
+                                <button className="btn primary small" style={{background:'#27ae60', borderColor:'#1e8449', width:'100%', marginTop:6}} disabled={!canAfford || aaQueue.length>=3} onClick={()=> orderAA(a.tier, selectedCity)}>Telepítés</button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {aaQueue.length>0 && (
+                          <div style={{marginTop:8}}>
+                            <div style={{fontSize:11, fontWeight:800}}>AA sor: {aaQueue.length}/3</div>
+                            {aaQueue.filter(q=> q.cityId===selectedCity.id).map(q=> (
+                              <div key={q.id} style={{background:'rgba(20,60,20,0.3)', borderRadius:6, padding:6, marginTop:4, fontSize:11}}>
+                                <div style={{display:'flex', justifyContent:'space-between'}}><b>{q.name} A{q.tier}</b><span>{q.progress.toFixed(1)}/{q.max}s</span></div>
+                                <div className="progress" style={{height:6, margin:'4px 0'}}><div className="fill" style={{width:`${(q.progress/q.max)*100}%`, background:'#27ae60'}}></div></div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedAAId && (()=>{ const aa=aas.find(x=>x.id===selectedAAId); if(!aa) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(46,204,113,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(46,204,113,0.4)'}}><b>Kiválasztva: AA A{aa.tier}</b> — kattints városra áttelepíteni! <button className="btn ghost small" onClick={()=> setSelectedAAId(null)}>Mégse</button></div>})()}
                       </div>
                     </>
                   ) : (
