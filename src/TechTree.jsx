@@ -16,24 +16,24 @@ export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
       <div className="tech-modal" onClick={e=> e.stopPropagation()}>
         <div className="tech-header">
           <div className="tech-title"><span className="brain">🧠</span> <span style={{color:'#2ecc71'}}>MAX</span> <span style={{color:'#fff'}}>TECHNOLOGY</span> = <span style={{color:'#e74c3c'}}>MAX POWER</span></div>
-          <button className="btn ghost small" onClick={onClose}>✕ Bezárás</button>
+          <button className="btn ghost small" onClick={onClose}>✕ Close</button>
         </div>
 
         {/* bonuses summary like image */}
         <div className="tech-bonuses">
           <div className="bonus-col">
-            <div className="brow">⚔️ +{bonuses.soldierDamage.toFixed(1)}% katona sebzés <span className="muted">/ {maxBonuses.soldierDamage}% max</span></div>
-            <div className="brow">⚡ +{bonuses.soldierSpeed.toFixed(0)}% katona sebesség <span className="muted">/ {maxBonuses.soldierSpeed}%</span></div>
-            <div className="brow">🚛 +{bonuses.tankDamage.toFixed(1)}% tank sebzés <span className="muted">/ {maxBonuses.tankDamage}%</span></div>
-            <div className="brow">💨 +{bonuses.tankSpeed.toFixed(0)}% tank sebesség <span className="muted">/ {maxBonuses.tankSpeed}%</span></div>
-            <div className="brow" style={{color:'#f1c40f'}}>💥 +{bonuses.allDamage.toFixed(0)}% MINDEN sebzés <span className="muted">/ {maxBonuses.allDamage}%</span></div>
+            <div className="brow">⚔️ +{bonuses.soldierDamage.toFixed(1)}% infantry damage <span className="muted">/ {maxBonuses.soldierDamage}% max</span></div>
+            <div className="brow">⚡ +{bonuses.soldierSpeed.toFixed(0)}% infantry speed <span className="muted">/ {maxBonuses.soldierSpeed}%</span></div>
+            <div className="brow">🚛 +{bonuses.tankDamage.toFixed(1)}% tank damage <span className="muted">/ {maxBonuses.tankDamage}%</span></div>
+            <div className="brow">💨 +{bonuses.tankSpeed.toFixed(0)}% tank speed <span className="muted">/ {maxBonuses.tankSpeed}%</span></div>
+            <div className="brow" style={{color:'#f1c40f'}}>💥 +{bonuses.allDamage.toFixed(0)}% ALL damage <span className="muted">/ {maxBonuses.allDamage}%</span></div>
           </div>
           <div className="bonus-col">
             <div className="brow">👥 +{bonuses.manpowerGain.toFixed(0)}% manpower <span className="muted">/ {maxBonuses.manpowerGain}%</span></div>
-            <div className="brow">⚙️ +{bonuses.armySpawnSpeed.toFixed(0)}% sereg spawn <span className="muted">/ {maxBonuses.armySpawnSpeed}%</span></div>
-            <div className="brow">💰 +{bonuses.taxGain.toFixed(0)}% adó <span className="muted">/ {maxBonuses.taxGain}%</span></div>
+            <div className="brow">⚙️ +{bonuses.armySpawnSpeed.toFixed(0)}% army spawn <span className="muted">/ {maxBonuses.armySpawnSpeed}%</span></div>
+            <div className="brow">💰 +{bonuses.taxGain.toFixed(0)}% tax <span className="muted">/ {maxBonuses.taxGain}%</span></div>
             <div className="brow">🏛️ +{bonuses.ppPerSec.toFixed(3)} PP/s <span className="muted">/ +{maxBonuses.ppPerSec.toFixed(3)}</span></div>
-            {isMax && <div className="brow maxed">🌟 MAX TECHNOLOGY ELÉRVE!</div>}
+            {isMax && <div className="brow maxed">🌟 MAX TECHNOLOGY REACHED!</div>}
           </div>
         </div>
 
@@ -57,13 +57,13 @@ export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
                       <div className="node-bonus">{lv.bonus}</div>
                       <div className="node-desc">{lv.desc}</div>
                       {owned ? (
-                        <div className="node-status done">✔ KUTATVA</div>
+                        <div className="node-status done">✔ RESEARCHED</div>
                       ) : next ? (
                         <button className="btn small primary" disabled={!canAfford} onClick={()=> onUpgrade(key)}>
-                          {canAfford ? 'Kutatás' : 'Nincs pénz'}
+                          {canAfford ? 'Research' : 'Not enough money'}
                         </button>
                       ) : (
-                        <div className="node-status lock">🔒 Előző szint kell</div>
+                        <div className="node-status lock">🔒 Previous level required</div>
                       )}
                       {idx<branch.levels.length-1 && <div className="connector" style={{background: owned ? branch.color : '#223'}}></div>}
                     </div>
@@ -75,8 +75,8 @@ export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
         </div>
 
         <div className="tech-footer">
-          <span>💡 Kiegyensúlyozott értékek — nem túl erősek, de érezhetőek. Eredeti 14.5% → nálunk 10%, 30% → 18%, 0.445 PP/s → 0.30 PP/s</span>
-          <span className="muted">Költségek az eredeti kép alapján: $74.20m → $2.47b low poly stílusban</span>
+          <span>💡 Balanced values — not overpowered but noticeable. Original 14.5% → ours 10%, 30% → 18%, 0.445 PP/s → 0.30 PP/s</span>
+          <span className="muted">Costs based on original image: $74.20m → $2.47b in low-poly style</span>
         </div>
       </div>
     </div>

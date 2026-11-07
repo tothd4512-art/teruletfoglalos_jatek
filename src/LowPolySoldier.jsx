@@ -1,5 +1,5 @@
 export default function LowPolySoldier({ x, y, scale=1, facing=1, variant=0 }){
-  // ratyi low poly block soldier - kicsit szögletes, árnyékkal
+  // janky low-poly block soldier - slightly angular, with shadow
   const colors = variant===1 ? 
     { body:'#2f3a18', helmet:'#3d4f1a' } : 
     { body:'#4b5320', helmet:'#3a3f1a' }
@@ -34,7 +34,7 @@ export default function LowPolySoldier({ x, y, scale=1, facing=1, variant=0 }){
       <rect x="-1.5" y="-6.5" width="3" height="1" fill="#333" opacity="0.5"/>
       {/* face - block yellow, ratyi */}
       <rect x="-3.8" y="-6" width="7.6" height="5" rx="0.8" fill="#ffdb4d" stroke="#000" strokeWidth="0.5"/>
-      {/* eyes - 2 dots, kicsit félre */}
+      {/* eyes - 2 dots, slightly off-center */}
       <rect x="-2" y="-4.5" width="1.4" height="1.4" rx="0.3" fill="#000"/>
       <rect x="1" y="-4.3" width="1.4" height="1.4" rx="0.3" fill="#000"/>
       <rect x="-2.5" y="-2.2" width="4" height="0.6" rx="0.3" fill="#d4a017"/>

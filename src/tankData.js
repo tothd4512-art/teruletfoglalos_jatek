@@ -1,7 +1,7 @@
 export const TANK_TIERS = [
   {
     tier: 1,
-    name: 'Könnyű tank',
+    name: 'Light Tank',
     short: 'Lt',
     costMoney: 420_000_000,
     costManpower: 12000,
@@ -13,7 +13,7 @@ export const TANK_TIERS = [
   },
   {
     tier: 2,
-    name: 'Közepes tank',
+    name: 'Medium Tank',
     short: 'Med',
     costMoney: 780_000_000,
     costManpower: 18000,
@@ -25,7 +25,7 @@ export const TANK_TIERS = [
   },
   {
     tier: 3,
-    name: 'Nehéz tank',
+    name: 'Heavy Tank',
     short: 'Hvy',
     costMoney: 1_420_000_000,
     costManpower: 28000,
@@ -37,7 +37,7 @@ export const TANK_TIERS = [
   },
   {
     tier: 4,
-    name: 'Szupernehéz',
+    name: 'Super-Heavy',
     short: 'SH',
     costMoney: 2_250_000_000,
     costManpower: 38000,

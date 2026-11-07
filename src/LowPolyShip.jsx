@@ -1,6 +1,6 @@
 export default function LowPolyShip({ x, y, tier=1, scale=1, rotation=0, owner='player' }){
   const palettes = [
-    { hull:'#5a6c7d', deck:'#7a8c9d', accent:'#3a4a5d' }, // I járőr - szürke-kék
+    { hull:'#5a6c7d', deck:'#7a8c9d', accent:'#3a4a5d' }, // I járőr - gray-blue
     { hull:'#6e7a8a', deck:'#8d9aaa', accent:'#2f3a4a' }, // II fregatt
     { hull:'#4a5a6a', deck:'#6b7d8e', accent:'#1a2a3a' }, // III cirkáló
     { hull:'#3a4a5a', deck:'#5a6a7a', accent:'#0f1a2a' }, // IV csatahajó

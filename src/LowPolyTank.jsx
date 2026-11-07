@@ -1,9 +1,9 @@
 export default function LowPolyTank({ x, y, tier=1, scale=1, rotation=0, owner='player' }){
   const colors = [
-    { body:'#7a7a6e', turret:'#6b6b5f', accent:'#4a4a3e' }, // I könnyű - szürke
-    { body:'#8d7a3d', turret:'#7a6a33', accent:'#5a4e22' }, // II közepes - homok
-    { body:'#4a6b4a', turret:'#3d5a3d', accent:'#2f442f' }, // III nehéz - zöld
-    { body:'#4a4a68', turret:'#3a3a58', accent:'#2a2a48' }, // IV szuper - sötétszürke-kék, low poly ratyi
+    { body:'#7a7a6e', turret:'#6b6b5f', accent:'#4a4a3e' }, // I light - gray
+    { body:'#8d7a3d', turret:'#7a6a33', accent:'#5a4e22' }, // II medium - sand
+    { body:'#4a6b4a', turret:'#3d5a3d', accent:'#2f442f' }, // III heavy - green
+    { body:'#4a4a68', turret:'#3a3a58', accent:'#2a2a48' }, // IV szuper - sötétgray-blue, low-poly janky
   ][Math.max(0, Math.min(3, tier-1))]
 
   const sizeMul = 0.9 + tier*0.12 // növekvő méret is

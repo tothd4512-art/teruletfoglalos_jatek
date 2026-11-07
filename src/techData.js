@@ -1,65 +1,65 @@
 export const TECH_TREE = {
   // Branch names matching image vibe, low poly
   soldier: {
-    name: 'Gyalogság',
+    name: 'Infantry',
     icon: '🪖',
     color: '#4a7c59',
     levels: [
-      { tier: 'I', cost: 74_200_000, bonus: '+2.5% katona sebzés', desc: 'Alap kiképzés' },
-      { tier: 'II', cost: 371_000_000, bonus: '+3.5% katona sebzés', desc: 'Haladó harcászat' },
-      { tier: 'III', cost: 1_230_000_000, bonus: '+4% katona sebzés', desc: 'Elit alakulatok' },
-      { tier: 'IV', cost: 2_360_000_000, bonus: '+18% katona sebesség', desc: 'Villámháború doktrína' },
+      { tier: 'I', cost: 74_200_000, bonus: '+2.5% infantry damage', desc: 'Basic Training' },
+      { tier: 'II', cost: 371_000_000, bonus: '+3.5% infantry damage', desc: 'Advanced Tactics' },
+      { tier: 'III', cost: 1_230_000_000, bonus: '+4% infantry damage', desc: 'Elite Units' },
+      { tier: 'IV', cost: 2_360_000_000, bonus: '+18% infantry speed', desc: 'Blitzkrieg Doctrine' },
     ],
     maxBonus: { soldierDamage: 10, soldierSpeed: 18 } // nerfed: original 14.5% +30%, we do 10%+18%
   },
   tank: {
-    name: 'Páncélosok',
+    name: 'Armor',
     icon: '🚛',
     color: '#5d6d7e',
     levels: [
-      { tier: 'I', cost: 61_800_000, bonus: '+2.5% tank sebzés', desc: 'Könnyű páncélos' },
-      { tier: 'II', cost: 296_800_000, bonus: '+3.5% tank sebzés', desc: 'Közepes tank' },
-      { tier: 'III', cost: 618_400_000, bonus: '+4% tank sebzés', desc: 'Nehéz páncélos' },
-      { tier: 'IV', cost: 1_230_000_000, bonus: '+18% tank sebesség', desc: 'Páncélos roham' },
+      { tier: 'I', cost: 61_800_000, bonus: '+2.5% tank damage', desc: 'Light Armor' },
+      { tier: 'II', cost: 296_800_000, bonus: '+3.5% tank damage', desc: 'Medium Tank' },
+      { tier: 'III', cost: 618_400_000, bonus: '+4% tank damage', desc: 'Heavy Armor' },
+      { tier: 'IV', cost: 1_230_000_000, bonus: '+18% tank speed', desc: 'Armor Assault' },
     ],
     // alternative second tank track from image (148m line) merged as speed branching — we keep one track, but cost 148m is included via scaling
     maxBonus: { tankDamage: 10, tankSpeed: 18 }
   },
   economy: {
-    name: 'Gazdaság',
+    name: 'Economy',
     icon: '💰',
     color: '#d4ac0d',
     levels: [
-      { tier: 'I', cost: 74_200_000, bonus: '+5% adóbevétel', desc: 'Adóreform' },
-      { tier: 'II', cost: 371_000_000, bonus: '+4% manpower', desc: 'Sorozás' },
-      { tier: 'III', cost: 989_500_000, bonus: '+6% sereg spawn', desc: 'Mozgósítás' },
-      { tier: 'IV', cost: 2_360_000_000, bonus: '+8% összes adó/manpower', desc: 'Hadigazdaság' },
+      { tier: 'I', cost: 74_200_000, bonus: '+5% tax income', desc: 'Tax Reform' },
+      { tier: 'II', cost: 371_000_000, bonus: '+4% manpower', desc: 'Conscription' },
+      { tier: 'III', cost: 989_500_000, bonus: '+6% army spawn', desc: 'Mobilization' },
+      { tier: 'IV', cost: 2_360_000_000, bonus: '+8% all tax/manpower', desc: 'War Economy' },
     ],
     maxBonus: { taxGain: 13, manpowerGain: 10, armySpawnSpeed: 15 } // original 20% tax, 20% manpower, 26% spawn -> nerfed 13/10/15
   },
   political: {
-    name: 'Politika',
+    name: 'Politics',
     icon: '🏛️',
     color: '#884ea0',
     levels: [
       { tier: 'I', cost: 74_200_000, bonus: '+0.07 PP/s', desc: 'Propaganda' },
-      { tier: 'II', cost: 371_000_000, bonus: '+0.08 PP/s', desc: 'Diplomácia' },
-      { tier: 'III', cost: 1_230_000_000, bonus: '+0.08 PP/s', desc: 'Stabilitás' },
-      { tier: 'IV', cost: 2_470_000_000, bonus: '+0.07 PP/s +5% minden sebzés', desc: 'Total War' },
+      { tier: 'II', cost: 371_000_000, bonus: '+0.08 PP/s', desc: 'Diplomacy' },
+      { tier: 'III', cost: 1_230_000_000, bonus: '+0.08 PP/s', desc: 'Stability' },
+      { tier: 'IV', cost: 2_470_000_000, bonus: '+0.07 PP/s +5% all damage', desc: 'Total War' },
     ],
     maxBonus: { ppPerSec: 0.30, allDamage: 5 }
   },
   bomb: {
-    name: 'Atombomba',
+    name: 'Nuclear',
     icon: '☢️',
     color: '#e74c3c',
     levels: [
-      { tier: 'I', cost: 450_000_000, bonus: '+8% kráter sugár', desc: 'Taktikai atom' },
-      { tier: 'II', cost: 890_000_000, bonus: '+12% kráter sugár', desc: 'Harcászati fej' },
-      { tier: 'III', cost: 1_500_000_000, bonus: '+18% kráter sugár', desc: 'Termonukleáris' },
-      { tier: 'IV', cost: 2_800_000_000, bonus: '+25% kráter sugár', desc: 'Armageddon' },
+      { tier: 'I', cost: 450_000_000, bonus: '+8% crater radius', desc: 'Tactical Nuke' },
+      { tier: 'II', cost: 890_000_000, bonus: '+12% crater radius', desc: 'Strategic Warhead' },
+      { tier: 'III', cost: 1_500_000_000, bonus: '+18% crater radius', desc: 'Thermonuclear' },
+      { tier: 'IV', cost: 2_800_000_000, bonus: '+25% crater radius', desc: 'Armageddon' },
     ],
-    maxBonus: { bombRadius: 63 } // +63% sugár összesen
+    maxBonus: { bombRadius: 63 } // +63% radius total
   }
 }
 

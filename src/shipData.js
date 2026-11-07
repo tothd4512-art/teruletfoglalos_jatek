@@ -1,7 +1,7 @@
 export const SHIP_TIERS = [
   {
     tier: 1,
-    name: 'Járőrhajó',
+    name: 'Patrol Boat',
     short: 'PB',
     costMoney: 520_000_000,
     costManpower: 14000,
@@ -13,7 +13,7 @@ export const SHIP_TIERS = [
   },
   {
     tier: 2,
-    name: 'Fregatt',
+    name: 'Frigate',
     short: 'FF',
     costMoney: 950_000_000,
     costManpower: 21000,
@@ -25,7 +25,7 @@ export const SHIP_TIERS = [
   },
   {
     tier: 3,
-    name: 'Cirkáló',
+    name: 'Cruiser',
     short: 'CA',
     costMoney: 1_650_000_000,
     costManpower: 32000,
@@ -37,7 +37,7 @@ export const SHIP_TIERS = [
   },
   {
     tier: 4,
-    name: 'Csatahajó',
+    name: 'Battleship',
     short: 'BB',
     costMoney: 2_600_000_000,
     costManpower: 45000,
@@ -52,7 +52,7 @@ export const SHIP_TIERS = [
 export function getShipStats(tier, techBonus){
   const base = SHIP_TIERS[tier-1]
   if(!base) return null
-  const dmgMult = 1 + (techBonus?.tankDamage||0)/100 + (techBonus?.allDamage||0)/100 // hajó is tank tech-et használ + all
+  const dmgMult = 1 + (techBonus?.tankDamage||0)/100 + (techBonus?.allDamage||0)/100 // ship also uses tank tech + all
   const speedMult = 1 + (techBonus?.tankSpeed||0)/100
   return {
     ...base,
