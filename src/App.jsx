@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { COUNTRIES, COUNTRY_POLYGONS } from './europeData.js'
 import LowPolySoldier from './LowPolySoldier.jsx'
+import TechTree from './TechTree.jsx'
+import { calcTechBonuses, TECH_COSTS } from './techData.js'
 import './App.css'
 
 const STORAGE_SERVERS = 'tf_servers_v2'
@@ -80,7 +82,10 @@ export default function App(){
     "BREAKING: Új szerver indult — EU Hadszíntér #1"
   ])
   const [floatingDamages, setFloatingDamages] = useState([])
+  const [techLevels, setTechLevels] = useState({ soldier:0, tank:0, economy:0, political:0 })
+  const [showTech, setShowTech] = useState(false)
   const tickRef = useRef(null)
+  const techBonuses = calcTechBonuses(techLevels)
 
   useEffect(()=>{ localStorage.setItem(STORAGE_SERVERS, JSON.stringify(servers)) }, [servers])
 
@@ -164,25 +169,29 @@ export default function App(){
     tickRef.current = setInterval(()=>{
       // date
       setGameDate(d=> { const nd=new Date(d); nd.setDate(nd.getDate()+1); return nd })
-      // incomes - allow negative money (debt) like video
+      // incomes - allow negative money (debt) like video + tech bonuses
       setResources(r=>{
         const owned = cities.filter(c=> owners[c.id]==='player')
         const econSum = owned.reduce((a,c)=> a + c.economy, 0)
         const defSum = owned.reduce((a,c)=> a + c.defense, 0)
-        const moneyInc = (4_000_000 + econSum * 6_500_000) / 10
-        const manInc = (400 + defSum * 180) / 10
-        const ppInc = (0.55 + owned.length*0.12) /10
+        const tb = calcTechBonuses(techLevels)
+        const taxMult = 1 + tb.taxGain/100
+        const manMult = 1 + tb.manpowerGain/100
+        const moneyInc = (4_000_000 + econSum * 6_500_000) * taxMult / 10
+        const manInc = (400 + defSum * 180) * manMult / 10
+        const ppInc = (0.55 + owned.length*0.12 + tb.ppPerSec) /10
         // stability drifts slightly
         const stabInc = (Math.random()-0.5)*0.02
         return {
-          money: r.money + moneyInc - (r.money<0 ? 120000 : 0), // debt interest if negative like -10b
+          money: r.money + moneyInc - (r.money<0 ? 120000 : 0),
           manpower: r.manpower + manInc,
           pp: Math.min(500, r.pp + ppInc),
           stability: Math.max(0, Math.min(500, r.stability + stabInc))
         }
       })
-      // spawn manpower occasionally as divisions (like video 100.00k stacks)
-      if(Math.random()<0.02){
+      // spawn manpower occasionally as divisions (like video 100.00k stacks) + tech spawn speed
+      const spawnBonus = calcTechBonuses(techLevels).armySpawnSpeed
+      if(Math.random()<0.02 * (1 + spawnBonus/100)){
         const ownedCities = cities.filter(c=> owners[c.id]==='player')
         if(ownedCities.length && resources.manpower>10000){
           const city = ownedCities[Math.floor(Math.random()*ownedCities.length)]
@@ -191,7 +200,8 @@ export default function App(){
             cityId: city.id, owner:'player', amount: 85000+Math.floor(Math.random()*30000),
             x: city.x + (Math.random()*16-8), y: city.y + 12 + Math.random()*8, hp:100
           }])
-          setResources(r=> ({...r, manpower: r.manpower - 8000}))
+          const spawnCost = Math.max(4000, 8000 - spawnBonus*30)
+          setResources(r=> ({...r, manpower: r.manpower - spawnCost}))
         }
       }
       setWar(w=>{
@@ -213,13 +223,16 @@ export default function App(){
       setCaptureWar(cw=>{
         if(!cw) return cw
         const nt = cw.timer -0.1
-        // show damage pops during capture
+        // show damage pops during capture + tech damage
         if(Math.random()<0.35){
           const city = cities.find(c=> c.id===cw.cityId)
           if(city){
-            const dmg = Math.floor(200+Math.random()*400)
+            const tb = calcTechBonuses(techLevels)
+            const dmgMult = 1 + (tb.soldierDamage + tb.tankDamage + tb.allDamage)/100
+            const base = Math.floor(200+Math.random()*400)
+            const dmg = Math.floor(base * dmgMult)
             const id = Date.now()+Math.random()
-            setFloatingDamages(f=> [...f, {id, x: city.x + (Math.random()*20-10), y: city.y + (Math.random()*10-5), val: `-${dmg}`, color: Math.random()<0.5 ? '#ff3b3b':'#ffa502'}])
+            setFloatingDamages(f=> [...f, {id, x: city.x + (Math.random()*20-10), y: city.y + (Math.random()*10-5), val: `-${dmg}`, color: dmgMult>1.08 ? '#2ecc71' : Math.random()<0.5 ? '#ff3b3b':'#ffa502'}])
             setTimeout(()=> setFloatingDamages(f=> f.filter(x=>x.id!==id)), 1200)
           }
         }
@@ -291,6 +304,17 @@ export default function App(){
     setCities(cs=> cs.map(c=> c.id===city.id ? {...c, defense: next} : c))
     pushNotif(`${city.name} védelem → szint ${next} (I-X)`, 'ok')
   }
+  function upgradeTech(branch){
+    const lvl = techLevels[branch]
+    if(lvl>=4) return pushNotif('Ez az ág már maxon van!', 'warn')
+    const cost = TECH_COSTS[branch][lvl]
+    if(resources.money < cost) return pushNotif(`Nincs elég pénzed! Kell: ${formatMoney(cost)}`, 'warn')
+    setResources(r=> ({...r, money: r.money - cost}))
+    setTechLevels(t=> ({...t, [branch]: t[branch]+1}))
+    const branchNames = { soldier:'Gyalogság', tank:'Páncélos', economy:'Gazdaság', political:'Politika' }
+    pushNotif(`Kutatás kész: ${branchNames[branch]} ${['I','II','III','IV'][lvl]} → ${['I','II','III','IV'][lvl+1]||'MAX'}!`, 'ok')
+    addTicker(`Kutatás: ${branchNames[branch]} ${['I','II','III','IV'][lvl+1]} szint elérve — ${playerName}`)
+  }
   function upgradeEconomySingle(city){
     if(owners[city.id]!=='player') return pushNotif('Csak saját várost fejleszthetsz!','warn')
     if(city.economy>=10) return pushNotif('Maximum szint elérve!','warn')
@@ -317,8 +341,9 @@ export default function App(){
   const selectedCity = cities.find(c=> c.id===selectedCityId)
   const ownedCount = cities.filter(c=> owners[c.id]==='player').length
   const totalCities = cities.length
-  const econIncomePerSec = (()=>{ const owned = cities.filter(c=> owners[c.id]==='player'); const sum = owned.reduce((a,c)=>a+c.economy,0); return 4_000_000 + sum*6_500_000 })()
-  const manIncomePerSec = (()=>{ const owned = cities.filter(c=> owners[c.id]==='player'); const sum = owned.reduce((a,c)=>a+c.defense,0); return 400 + sum*180 })()
+  const econIncomePerSec = (()=>{ const owned = cities.filter(c=> owners[c.id]==='player'); const sum = owned.reduce((a,c)=>a+c.economy,0); return (4_000_000 + sum*6_500_000) * (1 + techBonuses.taxGain/100) })()
+  const manIncomePerSec = (()=>{ const owned = cities.filter(c=> owners[c.id]==='player'); const sum = owned.reduce((a,c)=>a+c.defense,0); return (400 + sum*180) * (1 + techBonuses.manpowerGain/100) })()
+  const ppPerSec = (0.55 + ownedCount*0.12 + techBonuses.ppPerSec)
   const dateStr = gameDate.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })
 
   return (
@@ -329,16 +354,18 @@ export default function App(){
           <div className="resources">
             <div className="res money" style={resources.money<0? {color:'#ff4d4d'}:{}} title={`Bevétel: ${formatMoney(econIncomePerSec)}/s`}>{resources.money<0?'💸':'💰'} {formatMoney(resources.money)} <span className="inc">+{formatMoney(econIncomePerSec)}/s</span></div>
             <div className="res man">🪖 {formatManpower(resources.manpower)} <span className="inc">+{Math.round(manIncomePerSec)}/s</span></div>
-            <div className="res pp">🏛️ {resources.stability.toFixed(1)} <span className="inc">PP {Math.floor(resources.pp)}</span></div>
+            <div className="res pp">🏛️ {resources.stability.toFixed(1)} <span className="inc">PP {Math.floor(resources.pp)} +{ppPerSec.toFixed(2)}/s</span></div>
             <div className="res" style={{background:'#0e1a30'}}>📅 {dateStr}</div>
-            <div className="res cities">🏙️ {ownedCount}/{totalCities}</div>
+            <div className="res cities">🏙️ {ownedCount}/{totalCities} {techBonuses.soldierDamage>0 && <span className="tech-quick">⚔️+{techBonuses.soldierDamage.toFixed(0)}%</span>}</div>
           </div>
         )}
         <div className="header-actions">
+          {view==='game' && <button className="btn primary tech-btn" onClick={()=> setShowTech(true)}>🧪 Tech <span className="badge-dot">{Object.values(techLevels).reduce((a,b)=>a+b,0)}/16</span></button>}
           {view!=='servers' && <button className="btn ghost" onClick={()=> { setView('servers'); setWar(null); setCaptureWar(null)}}>Kilépés</button>}
           <div className="player-badge">👤 {playerName}</div>
         </div>
       </header>
+      {showTech && <TechTree techLevels={techLevels} onUpgrade={upgradeTech} resources={resources} onClose={()=> setShowTech(false)} />}
 
       {view==='game' && (
         <div style={{padding:'8px 14px 0 14px', maxWidth:1480, width:'100%', margin:'0 auto'}}>
@@ -612,13 +639,24 @@ export default function App(){
               ) : (<p className="muted">Válassz egy várost a térképen!</p>)}
             </div>
 
+            <div className="panel tech-mini">
+              <h4>🧠 Technológia — MAX POWER</h4>
+              <div className="log">
+                <div>⚔️ Katona: +{techBonuses.soldierDamage.toFixed(1)}% dmg, +{techBonuses.soldierSpeed}% sebesség</div>
+                <div>🚛 Tank: +{techBonuses.tankDamage.toFixed(1)}% dmg, +{techBonuses.tankSpeed}% sebesség</div>
+                <div>💥 Minden: +{techBonuses.allDamage}% • 💰 Adó +{techBonuses.taxGain}% • 👥 Manpower +{techBonuses.manpowerGain}%</div>
+                <div>⚙️ Spawn +{techBonuses.armySpawnSpeed}% • 🏛️ +{techBonuses.ppPerSec.toFixed(2)} PP/s</div>
+                <button className="btn small primary" onClick={()=> setShowTech(true)} style={{marginTop:6}}>Megnyitás — {Object.values(techLevels).reduce((a,b)=>a+b,0)}/16 kutatva</button>
+              </div>
+            </div>
+
             <div className="panel log-panel">
               <h4>🎮 Játéklog — Low Poly</h4>
               <div className="log">
                 <div>Spawn: {COUNTRIES.find(c=>c.id===myCountryId)?.capital} • {formatMoney(resources.money)} • {formatManpower(resources.manpower)} • {resources.stability.toFixed(1)} stabilitás</div>
-                <div>Justifying war → Confirmation → Ostrom sebzésekkel</div>
+                <div>Justifying war → Confirmation → Ostrom (tech dmg: +{(techBonuses.soldierDamage+techBonuses.tankDamage+techBonuses.allDamage).toFixed(1)}%)</div>
                 <div>Negatív pénz lehetséges (adósság) mint videóban</div>
-                <div>Divíziók: {divisions.length} egység a pályán</div>
+                <div>Divíziók: {divisions.length} egység • Spawn olcsóbb: -{(techBonuses.armySpawnSpeed*0.3).toFixed(0)}% manpower</div>
               </div>
             </div>
 
@@ -632,7 +670,7 @@ export default function App(){
       )}
 
       <div className="notif-stack">{notifs.map(n=> <div key={n.id} className={`notif ${n.type} ${n.text.includes('Captured')?'breaking':''}`}>{n.text}</div>)}</div>
-      <footer className="foot">Területfoglaló — Európa Hadszíntér • LOW POLY, kicsit ratyi de elfogadható • v0.3.0 • Roblox inspirálta de saját név</footer>
+      <footer className="foot">Területfoglaló — Európa Hadszíntér • LOW POLY + TECH TREE • v0.4.0 • MAX TECHNOLOGY = MAX POWER (kiegyensúlyozott) • Roblox inspirálta de saját név</footer>
     </div>
   )
 }
