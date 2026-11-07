@@ -6,7 +6,7 @@ function formatMoneyShort(v){
   return `$${v}`
 }
 
-export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
+export default function TechTree({ techLevels, techQueue=[], difficulty='normal', onUpgrade, resources, onClose }){
   const bonuses = calcTechBonuses(techLevels)
   const maxBonuses = TECH_BONUS_SUMMARY
   const isMax = Object.keys(techLevels).every(k=> techLevels[k]>=4)
@@ -49,6 +49,7 @@ export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
                   const next = lvl === idx
                   const canAfford = resources.money >= lv.cost
                   const isLocked = lvl < idx
+                  const queued = techQueue.find(q=> q.branch===key)
                   return (
                     <div key={idx} className={`tech-node ${owned?'owned':''} ${next?'next':''} ${isLocked?'locked':''}`}>
                       <div className="tier">{lv.tier}</div>
@@ -56,10 +57,15 @@ export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
                       <div className="node-cost">{formatMoneyShort(lv.cost)}</div>
                       <div className="node-bonus">{lv.bonus}</div>
                       <div className="node-desc">{lv.desc}</div>
-                      {owned ? (
+                      {queued && next ? (
+                        <div style={{background:'rgba(0,0,0,0.3)', borderRadius:6, padding:4, marginTop:4}}>
+                          <div style={{fontSize:10, fontWeight:800, color:'#f1c40f'}}>Researching... {queued.progress.toFixed(1)}/{queued.max.toFixed(0)}s ({difficulty})</div>
+                          <div className="progress" style={{height:6, marginTop:3}}><div className="fill" style={{width:`${(queued.progress/queued.max)*100}%`, background: branch.color}}></div></div>
+                        </div>
+                      ) : owned ? (
                         <div className="node-status done">✔ RESEARCHED</div>
                       ) : next ? (
-                        <button className="btn small primary" disabled={!canAfford} onClick={()=> onUpgrade(key)}>
+                        <button className="btn small primary" disabled={!canAfford || !!queued} onClick={()=> onUpgrade(key)}>
                           {canAfford ? 'Research' : 'Not enough money'}
                         </button>
                       ) : (
@@ -75,8 +81,8 @@ export default function TechTree({ techLevels, onUpgrade, resources, onClose }){
         </div>
 
         <div className="tech-footer">
-          <span>💡 Balanced values — not overpowered but noticeable. Original 14.5% → ours 10%, 30% → 18%, 0.445 PP/s → 0.30 PP/s</span>
-          <span className="muted">Costs based on original image: $74.20m → $2.47b in low-poly style</span>
+          <span>💡 Balanced values — not overpowered but noticeable. Original 14.5% → ours 10%, 30% → 18%, 0.445 PP/s → 0.30 PP/s — Research time: Lvl I 15s → IV 120s × difficulty ({difficulty})</span>
+          <span className="muted">Costs based on original image: $74.20m → $2.47b in low-poly style — Potato-friendly: simplified geometry, 60fps cap</span>
         </div>
       </div>
     </div>

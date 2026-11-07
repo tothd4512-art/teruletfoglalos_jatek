@@ -117,6 +117,11 @@ export default function App(){
   const [waypoints, setWaypoints] = useState([]) // [{x,y}]
   const [isPathMode, setIsPathMode] = useState(false)
   const [selectedArmy, setSelectedArmy] = useState([]) // array of unit ids? or 'all'
+  const [topMenuOpen, setTopMenuOpen] = useState(null) // army|navy|air|defense|economy|nuclear|diplomacy|movement
+  const [puppets, setPuppets] = useState({}) // botId -> masterId
+  const [peaceDeal, setPeaceDeal] = useState(null) // {enemyCountryId, moneyPct:0-80, returnCities:[], puppet:false}
+  const [difficulty, setDifficulty] = useState('normal') // easy|normal|hard
+  const [techQueue, setTechQueue] = useState([]) // {id, branch, lvl, progress, max}
   const tickRef = useRef(null)
   const gameDateRef = useRef(new Date(2026,10,7))
   const techBonuses = calcTechBonuses(techLevels)
@@ -134,6 +139,7 @@ export default function App(){
   const warRef = useRef(war)
   const captureWarRef = useRef(captureWar)
   const nukesRef = useRef(nukes)
+  const puppetsRef = useRef(puppets)
   // keep refs synced
   useEffect(()=>{ citiesRef.current=cities },[cities])
   useEffect(()=>{ ownersRef.current=owners },[owners])
@@ -149,6 +155,7 @@ export default function App(){
   useEffect(()=>{ captureWarRef.current=captureWar },[captureWar])
   useEffect(()=>{ nukesRef.current=nukes },[nukes])
   useEffect(()=>{ gameDateRef.current=gameDate },[gameDate])
+  useEffect(()=>{ puppetsRef.current=puppets },[puppets])
 
   useEffect(()=>{ localStorage.setItem(STORAGE_SERVERS, JSON.stringify(servers)) }, [servers])
 
@@ -238,8 +245,9 @@ export default function App(){
       // incomes - allow negative money (debt) like video + tech bonuses
       setResources(r=>{
         const owned = citiesRef.current.filter(c=> ownersRef.current[c.id]==='player')
-        const econSum = owned.reduce((a,c)=> a + c.economy, 0)
-        const defSum = owned.reduce((a,c)=> a + c.defense, 0)
+        const puppetCities = citiesRef.current.filter(c=> puppetsRef.current[ownersRef.current[c.id]]==='player')
+        const econSum = owned.reduce((a,c)=> a + c.economy, 0) + puppetCities.reduce((a,c)=> a + c.economy, 0)*0.5
+        const defSum = owned.reduce((a,c)=> a + c.defense, 0) + puppetCities.reduce((a,c)=> a + c.defense, 0)*0.5
         const tb = calcTechBonuses(techLevelsRef.current)
         const taxMult = 1 + tb.taxGain/100
         const manMult = 1 + tb.manpowerGain/100
@@ -291,9 +299,9 @@ export default function App(){
         const nt = cw.timer -0.1
         // show damage pops during capture + tech damage
         if(Math.random()<0.35){
-          const city = cities.find(c=> c.id===cw.cityId)
+          const city = citiesRef.current.find(c=> c.id===cw.cityId)
           if(city){
-            const tb = calcTechBonuses(techLevels)
+            const tb = calcTechBonuses(techLevelsRef.current)
             const dmgMult = 1 + (tb.soldierDamage + tb.tankDamage + tb.allDamage)/100
             const base = Math.floor(200+Math.random()*400)
             const dmg = Math.floor(base * dmgMult)
@@ -303,17 +311,56 @@ export default function App(){
           }
         }
         if(nt <=0){
-          const city = cities.find(c=> c.id===cw.cityId)
+          const city = citiesRef.current.find(c=> c.id===cw.cityId)
           if(city){
-            setOwners(o=> ({...o, [cw.cityId]: 'player'}))
-            setResources(r=> ({...r, money: r.money + 150_000_000, pp: Math.min(500, r.pp+5), stability: Math.min(500, r.stability+2)}))
-            pushNotif(`Captured ${city.name} ✕ — Captured: ${city.name} (${city.countryName})!`, 'ok')
-            addTicker(`Captured ${city.name} ✕ — ${COUNTRIES.find(c=>c.id===myCountryId)?.name} takes ${city.countryName}`)
-            setLastWarEnd(new Date(gameDate))
-            // spawn divisions at captured city
-            setDivisions(d=> [...d.slice(-18), {
-              id:`div-cap-${Date.now()}`, cityId: city.id, owner:'player', amount: 100000, x: city.x +4, y: city.y+10, hp:100
-            }])
+            // BATTLE EVALUATION: attacker must occupy city, defender can repel
+            // Calculate attacker power: player units near target + tech
+            const targetX=city.x, targetY=city.y
+            const nearby = (arr, r=28)=> arr.filter(u=> Math.hypot((u.x||u.targetX||targetX)-targetX, (u.y||u.targetY||targetY)-targetY) < r)
+            const tb=calcTechBonuses(techLevelsRef.current)
+            const attackerDivs=nearby(divisions.filter(d=> d.owner==='player'))
+            const attackerTanks=nearby(tanksRef.current.filter(t=> t.owner==='player'))
+            const attackerShips=nearby(ships.filter(s=> s.owner==='player'))
+            const attackerPlanes=nearby(planes.filter(p=> p.owner==='player'))
+            let attackerPower=0
+            attackerPower += attackerDivs.reduce((a,d)=> a + (d.amount||90000)/9000, 0)
+            attackerPower += attackerTanks.reduce((a,tt)=> a + (tt.stats?.damage||60)/4, 0)
+            attackerPower += attackerShips.reduce((a,ss)=> a + (ss.stats?.damage||70)/5, 0)
+            attackerPower += attackerPlanes.reduce((a,pp)=> a + (pp.stats?.damage||55)/4, 0)
+            // fallback: if no units nearby, use manpower as expeditionary force (less effective)
+            if(attackerPower < 5){
+              attackerPower += Math.max(0, (resourcesRef.current.manpower/20000)) * (1+ tb.soldierDamage/100)
+            }
+            // Defender power: city defense + enemy divisions/tanks near city
+            const ownerId=ownersRef.current[city.id]
+            const isBotOwner=ownerId && ownerId.startsWith('bot-')
+            const defenderDivs=nearby(divisions.filter(d=> d.owner===ownerId && ownerId!=='player'))
+            const defenderTanks=nearby(tanksRef.current.filter(t=> t.owner===ownerId))
+            let defenderPower= city.defense * 18 + city.defense * 3 // base defense weight
+            defenderPower += defenderDivs.reduce((a,d)=> a + (d.amount||90000)/7000, 0)
+            defenderPower += defenderTanks.length * 12
+            // enemy tech approximated: bot has random bonus 5-12%
+            defenderPower *= 1 + (Math.random()*0.12+0.03)
+            const ratio=attackerPower / Math.max(1, defenderPower)
+            // tech gives slight attacker bonus
+            const winChance = Math.min(0.95, Math.max(0.15, ratio/(1+ratio) + tb.allDamage/200))
+            const win = Math.random() < winChance
+            if(win){
+              setOwners(o=> ({...o, [cw.cityId]: 'player'}))
+              setResources(r=> ({...r, money: r.money + 150_000_000, pp: Math.min(500, r.pp+5), stability: Math.min(500, r.stability+2)}))
+              pushNotif(`Captured ${city.name} ✕ — Captured: ${city.name} (${city.countryName})! Attacker ${attackerPower.toFixed(1)} vs Defender ${defenderPower.toFixed(1)}`, 'ok')
+              addTicker(`Captured ${city.name} ✕ — ${COUNTRIES.find(c=>c.id===myCountryId)?.name} takes ${city.countryName} (battle ${attackerPower.toFixed(0)} vs ${defenderPower.toFixed(0)})`)
+              setLastWarEnd(new Date(gameDateRef.current))
+              setDivisions(d=> [...d.slice(-18), { id:`div-cap-${Date.now()}`, cityId: city.id, owner:'player', amount: 100000, x: city.x +4, y: city.y+10, targetX: city.x+4, targetY: city.y+10, hp:100, path:null }])
+              // damage attacker units slightly for next battle
+            } else {
+              pushNotif(`Attack on ${city.name} repelled! Defender stronger (${defenderPower.toFixed(1)} vs ${attackerPower.toFixed(1)}) — need more troops!`, 'warn')
+              addTicker(`Battle repelled at ${city.name}: defender holds (${defenderPower.toFixed(0)} vs ${attackerPower.toFixed(0)})`)
+              // apply losses to attacker
+              setDivisions(d=> d.map(dd=> attackerDivs.find(ad=> ad.id===dd.id) ? {...dd, amount: Math.max(20000, dd.amount - 15000)} : dd))
+              setTanks(t=> t.map(tt=> attackerTanks.find(at=> at.id===tt.id) ? {...tt, hp: Math.max(1, tt.hp - 25)} : tt))
+              setResources(r=> ({...r, stability: Math.max(0, r.stability - 4), pp: Math.max(0, r.pp - 2)}))
+            }
           }
           return null
         }
@@ -600,6 +647,22 @@ export default function App(){
       // cleanup dead planes
       setPlanes(ps=> ps.filter(p=> p.hp>0))
 
+      // TECH RESEARCH QUEUE - time depends on difficulty & level
+      setTechQueue(q=>{
+        if(q.length===0) return q
+        let newQ=q.map(i=> ({...i, progress: i.progress+0.1}))
+        const finished=newQ.filter(i=> i.progress>=i.max)
+        const remaining=newQ.filter(i=> i.progress < i.max)
+        if(finished.length){
+          finished.forEach(f=>{
+            setTechLevels(tl=> ({...tl, [f.branch]: f.lvl}))
+            const names={soldier:'Infantry', tank:'Armor', economy:'Economy', political:'Politics', bomb:'Nuclear'}
+            pushNotif(`Research complete: ${names[f.branch]||f.branch} Level ${['I','II','III','IV'][f.lvl-1]}!`, 'ok')
+            addTicker(`Research done: ${names[f.branch]||f.branch} Lvl ${f.lvl} — ${playerName}`)
+          })
+        }
+        return remaining
+      })
       // SILO QUEUE
       setSiloQueue(q=>{
         if(q.length===0) return q
@@ -744,9 +807,55 @@ export default function App(){
     setLastWarEnd(new Date(gameDate))
     pushNotif('War declaration withdrawn.', 'info')
   }
+  function proposePeace(enemyCountryId, enemyBotId){
+    setPeaceDeal({enemyCountryId, enemyBotId, moneyPct: 40, returnCities: [], puppet:false})
+  }
+  function confirmPeace(){
+    if(!peaceDeal) return
+    const {enemyCountryId, enemyBotId, moneyPct, returnCities, puppet} = peaceDeal
+    // calculate enemy money approx: cities * 1.2B
+    const enemyCities=cities.filter(c=> c.countryId===enemyCountryId)
+    const enemyOwned=enemyCities.filter(c=> owners[c.id]===enemyBotId)
+    const captured=cities.filter(c=> c.countryId===enemyCountryId && owners[c.id]==='player')
+    const enemyMoney=Math.max(500_000_000, enemyOwned.length*1_200_000_000 + captured.length*800_000_000)
+    const demanded=Math.floor(enemyMoney * (moneyPct/100))
+    if(moneyPct>80){ pushNotif('Max 80% can be demanded!', 'warn'); return}
+    // transfer money
+    if(demanded>0){
+      setResources(r=> ({...r, money: r.money + demanded}))
+      pushNotif(`Peace: demanded ${moneyPct}% ($${(demanded/1_000_000_000).toFixed(2)}b) from ${COUNTRIES.find(c=>c.id===enemyCountryId)?.name}`, 'ok')
+      addTicker(`Peace treaty: ${COUNTRIES.find(c=>c.id===enemyCountryId)?.name} pays ${formatMoney(demanded)} war reparations`)
+    }
+    // return territory
+    if(returnCities.length>0){
+      setOwners(o=>{ const n={...o}; returnCities.forEach(cid=> { if(n[cid]==='player') n[cid]=enemyBotId }); return n})
+      pushNotif(`Returned ${returnCities.length} cities to ${COUNTRIES.find(c=>c.id===enemyCountryId)?.name}`, 'info')
+    }
+    // puppet
+    if(puppet){
+      // keep captured cities under puppet but mark as puppet: do not annex, instead set puppet flag and return all captured
+      // For puppet we return all captured to enemy but mark puppet
+      if(captured.length>0 && returnCities.length===0){
+        // auto-return all if puppet and no explicit return (puppet keeps territory)
+        setOwners(o=>{ const n={...o}; captured.forEach(c=> { if(n[c.id]==='player') n[c.id]=enemyBotId }); return n})
+      }
+      setPuppets(ps=> ({...ps, [enemyBotId]: 'player'}))
+      pushNotif(`${COUNTRIES.find(c=>c.id===enemyCountryId)?.name} is now your puppet! You control it without annexation.`, 'ok')
+      addTicker(`BREAKING: ${COUNTRIES.find(c=>c.id===enemyCountryId)?.name} becomes puppet of ${COUNTRIES.find(c=>c.id===myCountryId)?.name}`)
+    } else {
+      // normal annexation: captured stays with player (already)
+      if(captured.length>0) pushNotif(`Annexed ${captured.length} cities from ${COUNTRIES.find(c=>c.id===enemyCountryId)?.name}`, 'ok')
+    }
+    setLastWarEnd(new Date(gameDate))
+    setPeaceDeal(null)
+    // clear war if existed
+    if(war && war.targetCountryId===enemyCountryId) setWar(null)
+    if(captureWar) setCaptureWar(null)
+  }
+  function cancelPeaceDeal(){ setPeaceDeal(null) }
 
   function upgradeDefense(city){
-    if(owners[city.id]!=='player') return pushNotif('Csak own citiest fejleszthetsz!','warn')
+    if(owners[city.id]!=='player') return pushNotif('You can only upgrade own cities!','warn')
     if(city.defense>=10) return pushNotif('Maximum level (X) reached!','warn')
     const next = city.defense+1
     const cost = defenseCost(next)
@@ -758,13 +867,20 @@ export default function App(){
   function upgradeTech(branch){
     const lvl = techLevels[branch]
     if(lvl>=4) return pushNotif('This branch is already maxed!', 'warn')
+    // check if already researching this branch
+    if(techQueue.some(q=> q.branch===branch)) return pushNotif('Already researching this branch!', 'warn')
     const cost = TECH_COSTS[branch][lvl]
     if(resources.money < cost) return pushNotif(`Not enough money! Need: ${formatMoney(cost)}`, 'warn')
     setResources(r=> ({...r, money: r.money - cost}))
-    setTechLevels(t=> ({...t, [branch]: t[branch]+1}))
-    const branchNames = { soldier:'Infantry', tank:'Armor', economy:'Economy', political:'Politika' }
-    pushNotif(`Research ready: ${branchNames[branch]} ${['I','II','III','IV'][lvl]} → ${['I','II','III','IV'][lvl+1]||'MAX'}!`, 'ok')
-    addTicker(`Research: ${branchNames[branch]} ${['I','II','III','IV'][lvl+1]} level reached — ${playerName}`)
+    // time depends on difficulty and level: base 15s, 30s, 60s, 120s
+    const baseTimes=[15,30,60,120]
+    const base=baseTimes[lvl]||20
+    const diffMult={easy:0.7, normal:1, hard:1.5}[difficulty]||1
+    const max=base*diffMult
+    const id=Date.now()+Math.random()
+    setTechQueue(q=> [...q, {id, branch, lvl: lvl+1, progress:0, max}])
+    const branchNames={ soldier:'Infantry', tank:'Armor', economy:'Economy', political:'Politics', bomb:'Nuclear' }
+    pushNotif(`Research started: ${branchNames[branch]} → Level ${['I','II','III','IV'][lvl]}→${['I','II','III','IV'][lvl+1]||'MAX'} (${max.toFixed(0)}s, ${difficulty})`, 'info')
   }
   function orderTank(tier, city){
     if(owners[city.id]!=='player') return pushNotif('You can only build tanks in own cities!','warn')
@@ -873,7 +989,7 @@ export default function App(){
     pushNotif(`Ship order: ${targetCity.name} towards`, 'info')
   }
   function upgradeEconomySingle(city){
-    if(owners[city.id]!=='player') return pushNotif('Csak own citiest fejleszthetsz!','warn')
+    if(owners[city.id]!=='player') return pushNotif('You can only upgrade own cities!','warn')
     if(city.economy>=10) return pushNotif('Maximum level reached!','warn')
     const cost = economyCost(city.economy+1, 1)
     if(resources.money < cost) return pushNotif(`Not enough money: ${formatMoney(cost)}`,'warn')
@@ -927,7 +1043,7 @@ export default function App(){
           <div className="player-badge">👤 {playerName}</div>
         </div>
       </header>
-      {showTech && <TechTree techLevels={techLevels} onUpgrade={upgradeTech} resources={resources} onClose={()=> setShowTech(false)} />}
+      {showTech && <TechTree techLevels={techLevels} techQueue={techQueue} difficulty={difficulty} onUpgrade={upgradeTech} resources={resources} onClose={()=> setShowTech(false)} />}
 
       {view==='game' && (
         <div style={{padding:'8px 14px 0 14px', maxWidth:1480, width:'100%', margin:'0 auto'}}>
@@ -1029,6 +1145,208 @@ export default function App(){
         </div>
       )}
 
+      {/* TOP RIBBON MENUS - all actions without scrolling */}
+      {view==='game' && (
+        <div className="top-ribbon">
+          <div className="ribbon-inner">
+            <button className={`ribbon-btn ${topMenuOpen==='army'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='army'?null:'army')}>🪖 Army</button>
+            <button className={`ribbon-btn ${topMenuOpen==='navy'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='navy'?null:'navy')}>🚢 Navy</button>
+            <button className={`ribbon-btn ${topMenuOpen==='air'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='air'?null:'air')}>✈️ Air</button>
+            <button className={`ribbon-btn ${topMenuOpen==='defense'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='defense'?null:'defense')}>🎯 Defense</button>
+            <button className={`ribbon-btn ${topMenuOpen==='economy'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='economy'?null:'economy')}>💰 Economy</button>
+            <button className={`ribbon-btn ${topMenuOpen==='nuclear'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='nuclear'?null:'nuclear')}>☢️ Nuclear</button>
+            <button className={`ribbon-btn ${topMenuOpen==='diplomacy'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='diplomacy'?null:'diplomacy')}>🏛️ Diplomacy</button>
+            <button className={`ribbon-btn ${topMenuOpen==='movement'?'active':''}`} onClick={()=> setTopMenuOpen(topMenuOpen==='movement'?null:'movement')}>🚩 Movement</button>
+            <span className="ribbon-diff">Difficulty:
+              <select value={difficulty} onChange={e=> setDifficulty(e.target.value)} style={{marginLeft:6, background:'#0e1a30', color:'#fff', border:'1px solid #1e335c', borderRadius:6, padding:'2px 6px'}}>
+                <option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option>
+              </select>
+            </span>
+          </div>
+          {topMenuOpen && (
+            <div className="ribbon-dropdown" onClick={e=> e.stopPropagation()}>
+              <button className="ribbon-close" onClick={()=> setTopMenuOpen(null)}>✕</button>
+              {topMenuOpen==='army' && (
+                <div>
+                  <h4>🪖 Tank Factory — Ascending (Power + Speed + Tech)</h4>
+                  {!selectedCity ? <p className="muted">Select a city on the map to produce tanks.</p> : (
+                    <>
+                      <p className="muted">Selected: <b>{selectedCity.name}</b> — T1 Light → T4 Super-heavy</p>
+                      <div className="tank-grid" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                        {TANK_TIERS.map(tt=>{
+                          const stats=getTankStats(tt.tier, techBonuses)
+                          const canAfford=resources.money>=stats.costMoney && resources.manpower>=stats.costManpower
+                          return <div key={tt.tier} style={{background:'#0c1b33', border:'1.5px solid #1e335c', borderRadius:8, padding:8, textAlign:'center'}}>
+                            <div style={{fontWeight:900}}>{tt.icon} T{tt.tier} {tt.name}</div>
+                            <div style={{fontSize:11, color:'#8aa0c0'}}>{stats.damage} dmg • {stats.speed} spd • {stats.hp} HP</div>
+                            <div style={{fontSize:10, background:'rgba(0,0,0,0.25)', padding:3, borderRadius:6, margin:'4px 0'}}>{formatMoney(stats.costMoney)}<br/>{formatManpower(stats.costManpower)} • {stats.buildTime}s</div>
+                            <button className="btn primary small" disabled={!canAfford || tankQueue.length>=3} onClick={()=> orderTank(tt.tier, selectedCity)} style={{width:'100%'}}>Produce</button>
+                          </div>
+                        })}
+                      </div>
+                      {tankQueue.length>0 && <div style={{marginTop:8, fontSize:11}}><b>Queue: {tankQueue.length}/3</b> {tankQueue.filter(q=> q.cityId===selectedCity.id).map(q=> <span key={q.id} style={{marginLeft:6}}>{q.name} {q.progress.toFixed(1)}/{q.max}s</span>)}</div>}
+                    </>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='navy' && (
+                <div>
+                  <h4>🚢 Naval Fleet — Ascending (Fast on Water + Tech)</h4>
+                  {!selectedCity ? <p className="muted">Select a coastal city to launch ships.</p> : (
+                    <>
+                      <p className="muted">Selected: <b>{selectedCity.name}</b></p>
+                      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                        {SHIP_TIERS.map(s=>{
+                          const stats=getShipStats(s.tier, techBonuses)
+                          const canAfford=resources.money>=stats.costMoney && resources.manpower>=stats.costManpower
+                          return <div key={s.tier} style={{background:'#0c253e', border:'1.5px solid #1e4a6e', borderRadius:8, padding:8, textAlign:'center'}}>
+                            <div style={{fontWeight:900}}>{s.icon} H{s.tier} {s.name}</div>
+                            <div style={{fontSize:11}}>{stats.damage} dmg • {stats.speed} spd</div>
+                            <button className="btn primary small" style={{background:'#2980b9', width:'100%'}} disabled={!canAfford || shipQueue.length>=3} onClick={()=> orderShip(s.tier, selectedCity)}>Launch</button>
+                          </div>
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='air' && (
+                <div>
+                  <h4>✈️ Air Force — Ascending (Fastest + Tech)</h4>
+                  {!selectedCity ? <p className="muted">Select a city for airfield.</p> : (
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                      {PLANE_TIERS.map(pl=>{
+                        const stats=getPlaneStats(pl.tier, techBonuses)
+                        const canAfford=resources.money>=stats.costMoney && resources.manpower>=stats.costManpower
+                        return <div key={pl.tier} style={{background:'#1e1e3a', border:'1.5px solid #4a4a6e', borderRadius:8, padding:8, textAlign:'center'}}>
+                          <div style={{fontWeight:900}}>{pl.icon} R{pl.tier} {pl.name}</div>
+                          <div style={{fontSize:11}}>{stats.damage} dmg • {stats.speed} spd</div>
+                          <button className="btn primary small" style={{background:'#6c5ce7', width:'100%'}} disabled={!canAfford || planeQueue.length>=3} onClick={()=> orderPlane(pl.tier, selectedCity)}>Deploy</button>
+                        </div>
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='defense' && (
+                <div>
+                  <h4>🎯 Air Defense — vs Aircraft</h4>
+                  {!selectedCity ? <p className="muted">Select a city to deploy AA.</p> : (
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8}}>
+                      {AA_TIERS.map(a=>{
+                        const stats=getAAStats(a.tier, techBonuses)
+                        const canAfford=resources.money>=stats.costMoney && resources.manpower>=stats.costManpower
+                        return <div key={a.tier} style={{background:'#0e2a0e', border:'1.5px solid #27ae60', borderRadius:8, padding:8, textAlign:'center'}}>
+                          <div style={{fontWeight:900}}>{a.icon} A{a.tier} {a.name}</div>
+                          <button className="btn primary small" style={{background:'#27ae60', width:'100%'}} disabled={!canAfford || aaQueue.length>=3} onClick={()=> orderAA(a.tier, selectedCity)}>Deploy</button>
+                        </div>
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='economy' && (
+                <div>
+                  <h4>💰 Economy & Defense Upgrades</h4>
+                  {!selectedCity ? <p className="muted">Select own city to upgrade.</p> : owners[selectedCity.id]!=='player' ? <p className="muted">You can only upgrade own cities!</p> : (
+                    <>
+                      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+                        <div style={{background:'var(--panel2)', padding:10, borderRadius:8}}>
+                          <b>🛡️ Defense {selectedCity.defense} → {selectedCity.defense+1}</b><br/>
+                          <span className="muted">Cost: {formatManpower(defenseCost(selectedCity.defense+1).manpower)} + {formatMoney(defenseCost(selectedCity.defense+1).money)}</span><br/>
+                          <button className="btn primary small" disabled={selectedCity.defense>=10 || resources.money < defenseCost(selectedCity.defense+1).money || resources.manpower < defenseCost(selectedCity.defense+1).manpower} onClick={()=> upgradeDefense(selectedCity)}>{selectedCity.defense>=10?'MAX':'Upgrade'}</button>
+                        </div>
+                        <div style={{background:'var(--panel2)', padding:10, borderRadius:8}}>
+                          <b>💰 Economy {selectedCity.economy} → {selectedCity.economy+1}</b><br/>
+                          <span className="muted">Single: {formatMoney(economyCost(selectedCity.economy+1,1))}</span><br/>
+                          <button className="btn small" onClick={()=> upgradeEconomySingle(selectedCity)}>Upgrade 1 city</button>
+                        </div>
+                      </div>
+                      <div style={{marginTop:8}}>Bulk: {multiSelect.length} selected <button className="btn primary small" disabled={multiSelect.length===0} onClick={upgradeEconomyBulk}>Bulk Upgrade</button> {multiSelect.length>0 && <button className="btn ghost small" onClick={()=> setMultiSelect([])}>Clear</button>}</div>
+                    </>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='nuclear' && (
+                <div>
+                  <h4>☢️ Nuclear Silo — $1B / 100k per silo & per launch</h4>
+                  {!selectedCity ? <p className="muted">Select a city for silo.</p> : (
+                    <>
+                      {silos[selectedCity.id]?.built ? <div style={{background:'rgba(247,198,0,0.15)', padding:8, borderRadius:8, border:'1px solid #f1c40f'}}>✔ Silo ready at {selectedCity.name} — ready to launch. Total silos: {Object.keys(silos).filter(k=> silos[k].built).length}</div>
+                      : siloQueue.find(q=> q.cityId===selectedCity.id) ? (()=>{const q=siloQueue.find(qq=> qq.cityId===selectedCity.id); return <div><b>Silo building...</b> {q.progress.toFixed(1)}/{q.max}s</div>})()
+                      : <button className="btn primary small" style={{background:'#f1c40f', color:'#000'}} disabled={resources.money < SILO_COST.money || resources.manpower < SILO_COST.manpower} onClick={()=> buildSilo(selectedCity)}>Build Silo — $1B + 100k</button>}
+                      {Object.keys(silos).filter(k=> silos[k].built).length>0 && selectedCity && owners[selectedCity.id]!=='player' && <div style={{marginTop:8, padding:8, background:'rgba(231,76,60,0.15)', border:'1px solid #e74c3c', borderRadius:8}}><div style={{fontWeight:900, color:'#e74c3c'}}>☢️ NUKE LAUNCH</div><button className="btn primary big" style={{background:'#e74c3c', width:'100%'}} disabled={resources.money < NUKE_COST.money || resources.manpower < NUKE_COST.manpower} onClick={()=> launchNuke(selectedCity)}>LAUNCH at {selectedCity.name}!</button></div>}
+                    </>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='diplomacy' && (
+                <div>
+                  <h4>🏛️ War & Peace</h4>
+                  {!selectedCity ? <p className="muted">Select enemy city to declare war.</p> : owners[selectedCity.id]==='player' ? <p>Own city — cannot attack. Select enemy city.</p> : (
+                    <>
+                      <p className="muted">Target: <b>{selectedCity.name}</b> ({COUNTRIES.find(c=>c.id===selectedCity.countryId)?.name}) — Cost 50 PP</p>
+                      <button className="btn primary big" disabled={!!war || !!captureWar || resources.pp<50} onClick={()=> startWar(selectedCity)}>⚔️ Declare War — {selectedCity.name}</button>
+                      {war && <div style={{marginTop:8}}><b>War phase: {war.phase}</b> {war.timer.toFixed(1)}s/{war.max}s <button className="btn small ghost" onClick={cancelWar}>Withdraw</button> {war.phase==='confirmation' && <button className="btn small primary" onClick={confirmWar}>Confirm</button>}</div>}
+                      {captureWar && <div style={{marginTop:8, color:'#e74c3c'}}><b>Siege:</b> {cities.find(c=>c.id===captureWar.cityId)?.name} {captureWar.timer.toFixed(1)}s remaining — battle ongoing!</div>}
+                      <div style={{marginTop:10, borderTop:'1px solid #1e335c', paddingTop:8}}>
+                        <b>Peace Deals:</b> {bots.length>0 && bots.map(b=> {
+                          const enemyCities=cities.filter(c=> owners[c.id]===b.id)
+                          const myCaptured=cities.filter(c=> c.countryId===b.countryId && owners[c.id]==='player')
+                          if(enemyCities.length===0 && myCaptured.length===0) return null
+                          return <div key={b.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(0,0,0,0.2)', padding:6, borderRadius:6, marginTop:4}}>
+                            <span>{b.name} ({COUNTRIES.find(c=>c.id===b.countryId)?.name}) — {enemyCities.length} cities left</span>
+                            <button className="btn small primary" onClick={()=> {setPeaceDeal({enemyCountryId:b.countryId, enemyBotId:b.id, moneyPct:0, returnCities:[], puppet:false}); setTopMenuOpen(null)}}>Offer Peace</button>
+                          </div>
+                        })}
+                      </div>
+                      <div style={{marginTop:8, fontSize:11}}>Puppets: {Object.keys(puppets).length===0?'none': Object.entries(puppets).map(([k,v])=> `${k}→${v}`).join(', ')}</div>
+                    </>
+                  )}
+                </div>
+              )}
+              {topMenuOpen==='movement' && (
+                <div>
+                  <h4>🚩 Army Movement — Draw Route with Waypoints</h4>
+                  <p className="muted">Click map to add waypoints (line + dot at end). Long routes via multiple clicks. Confirm with "Mobilize Troops".</p>
+                  {!isPathMode ? <button className="btn primary" onClick={startPathMode}>🚩 Start Route Drawing</button> : (
+                    <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
+                      <span style={{fontWeight:800, color:'#f1c40f'}}>{waypoints.length} waypoints</span>
+                      <button className="btn primary" style={{background:'#27ae60'}} onClick={confirmMobilization}>✓ Confirm Mobilization</button>
+                      <button className="btn ghost" onClick={cancelPath}>✕ Cancel</button>
+                      {waypoints.length>0 && <button className="btn ghost" onClick={()=> setWaypoints(w=> w.slice(0,-1))}>↩︎ Undo Last</button>}
+                    </div>
+                  )}
+                  <div style={{marginTop:8, fontSize:11}}>Units will follow waypoints sequentially. Tanks {tanks.filter(t=>t.owner==='player').length} • Ships {ships.filter(s=>s.owner==='player').length} • Planes {planes.filter(p=>p.owner==='player').length} • Divisions {divisions.filter(d=>d.owner==='player').length}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {peaceDeal && (
+        <div className="peace-modal" onClick={()=> setPeaceDeal(null)}>
+          <div className="peace-box" onClick={e=> e.stopPropagation()}>
+            <h3>🏳️ Peace Treaty — {COUNTRIES.find(c=>c.id===peaceDeal.enemyCountryId)?.name}</h3>
+            <p className="muted">Victorious side dictates terms. Max 80% money demand, you may return territory or create puppet.</p>
+            <div style={{margin:'10px 0'}}>
+              <label><b>Demand Money: {peaceDeal.moneyPct}%</b> (max 80%)</label><br/>
+              <input type="range" min="0" max="80" value={peaceDeal.moneyPct} onChange={e=> setPeaceDeal(p=> ({...p, moneyPct: parseInt(e.target.value)}))} style={{width:'100%'}}/>
+              <div className="muted">Enemy money ~ {formatMoney((cities.filter(c=> c.countryId===peaceDeal.enemyCountryId && owners[c.id]===peaceDeal.enemyBotId).length*1200000000))} — you will get {formatMoney(Math.floor(cities.filter(c=> c.countryId===peaceDeal.enemyCountryId && owners[c.id]===peaceDeal.enemyBotId).length*1200000000*(peaceDeal.moneyPct/100)))}</div>
+            </div>
+            <div style={{margin:'10px 0'}}>
+              <b>Return Territory (captured cities):</b>
+              {(()=>{ const caps=cities.filter(c=> c.countryId===peaceDeal.enemyCountryId && owners[c.id]==='player'); if(caps.length===0) return <p className="muted">No captured cities to return.</p>; return caps.map(c=> <label key={c.id} style={{display:'flex', gap:6, alignItems:'center', background:'rgba(0,0,0,0.2)', padding:6, borderRadius:6, marginTop:4}}><input type="checkbox" checked={peaceDeal.returnCities.includes(c.id)} onChange={e=> setPeaceDeal(p=> ({...p, returnCities: e.target.checked ? [...p.returnCities, c.id] : p.returnCities.filter(x=> x!==c.id)}))}/> {c.name} — {c.defense}🛡 {c.economy}💰</label>)})()}
+            </div>
+            <label style={{display:'flex', gap:6, alignItems:'center', background:'rgba(241,196,15,0.12)', padding:8, borderRadius:8, marginTop:8}}><input type="checkbox" checked={peaceDeal.puppet} onChange={e=> setPeaceDeal(p=> ({...p, puppet:e.target.checked}))}/> <b>Puppet State</b> — Don't annex, but control country (puppet keeps territory, you direct it)</label>
+            {peaceDeal.puppet && <p className="muted" style={{marginTop:6}}>Puppet: all captured cities will be returned, but {COUNTRIES.find(c=>c.id===peaceDeal.enemyCountryId)?.name} becomes your puppet (yellow border, 50% income to you).</p>}
+            <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:12}}>
+              <button className="btn ghost" onClick={cancelPeaceDeal}>Cancel</button>
+              <button className="btn primary" onClick={confirmPeace}>Confirm Peace — Enforce Terms</button>
+            </div>
+          </div>
+        </div>
+      )}
       {view==='game' && (
         <div className="game-layout">
           <div className="map-area">
@@ -1078,16 +1396,36 @@ export default function App(){
                 </g>
                 {/* countries low-poly - colorful like in image */}
                 {COUNTRIES.map(c=>{
-                  const isMine = c.id===myCountryId || cities.some(city=> city.countryId===c.id && owners[city.id]==='player')
-                  const isBot = bots.some(b=> b.countryId===c.id)
+                  // OCCUPIED TERRITORIES: color by dominant owner
+                  const countryCities=cities.filter(city=> city.countryId===c.id)
+                  const ownerCounts={}
+                  countryCities.forEach(cc=>{ const o=owners[cc.id]; if(o) ownerCounts[o]=(ownerCounts[o]||0)+1 })
+                  let dominant=null, maxCnt=0
+                  for(const [o,cnt] of Object.entries(ownerCounts)){ if(cnt>maxCnt){ maxCnt=cnt; dominant=o } }
+                  const isMine = dominant==='player' || (c.id===myCountryId && !dominant) // home country counts as mine if no dominant
+                  const isBot = !!dominant && dominant.startsWith('bot-')
+                  const puppetOwner = dominant && puppets[dominant] ? puppets[dominant] : null
+                  const isPuppet = !!puppetOwner
                   const isSelectedCountry = myCountryId===c.id
-                  const baseColor = c.color
+                  let baseColor = c.color
+                  // recolor occupied: if player dominates, use player nation color with tint; if bot dominates, use bot nation color
+                  if(dominant==='player'){
+                    const myCol=COUNTRIES.find(cc=> cc.id===myCountryId)?.color || '#2ecc71'
+                    baseColor=myCol
+                  } else if(isBot && !isPuppet){
+                    const bot=bots.find(b=> b.id===dominant)
+                    if(bot){ const botCol=COUNTRIES.find(cc=> cc.id===bot.countryId)?.color; if(botCol) baseColor=botCol }
+                  } else if(isPuppet){
+                    // puppet: hatched pattern - use base but with puppet stripe overlay via stroke dash
+                    const masterCol=COUNTRIES.find(cc=> cc.id===myCountryId)?.color || '#2ecc71'
+                    baseColor=masterCol // puppet shows master's color but with special border
+                  }
                   const path = COUNTRY_POLYGONS[c.id]
-                  // ownership overlay: own = vivid + green border, enemy = darker + red border
                   let stroke = '#000'
                   let strokeW = 1.6
-                  if(isMine) { stroke = '#0f5a2a'; strokeW=2.4 }
-                  else if(isBot) { stroke = '#6b1a1a'; strokeW=1.8 }
+                  if(isMine) { stroke = '#0f5a2a'; strokeW=2.5 }
+                  else if(isPuppet) { stroke='#f1c40f'; strokeW=2.2 }
+                  else if(isBot) { stroke = '#6b1a1a'; strokeW=1.9 }
                   return (
                     <g key={c.id}>
                       <path d={path} fill={baseColor} stroke={stroke} strokeWidth={strokeW} opacity={isSelectedCountry?1: isMine?0.95: isBot?0.92:0.88} style={{filter:'drop-shadow(1px 1px 0 rgba(0,0,0,0.4))'}} />
