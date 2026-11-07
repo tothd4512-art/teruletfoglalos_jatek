@@ -84,7 +84,7 @@ export default function App(){
   const [notifs, setNotifs] = useState([])
   const [bots, setBots] = useState([])
   const [myCountryId, setMyCountryId] = useState(null)
-  const [gameDate, setGameDate] = useState(new Date(2032,1,4))
+  const [gameDate, setGameDate] = useState(new Date(2026,10,7)) // 2026-11-07 mai dátumról indul
   const [divisions, setDivisions] = useState([]) // {id, cityId, owner, amount, x,y, hp}
   const [tickerItems, setTickerItems] = useState([
     "Isle of Man started justifying a war against Spanish Empire",
@@ -93,7 +93,7 @@ export default function App(){
     "BREAKING: Új szerver indult — EU Hadszíntér #1"
   ])
   const [floatingDamages, setFloatingDamages] = useState([])
-  const [techLevels, setTechLevels] = useState({ soldier:0, tank:0, economy:0, political:0 })
+  const [techLevels, setTechLevels] = useState({ soldier:0, tank:0, economy:0, political:0, bomb:0 })
   const [showTech, setShowTech] = useState(false)
   const [tanks, setTanks] = useState([]) // {id, tier, x,y, targetX,targetY, owner, hp, rotation}
   const [tankQueue, setTankQueue] = useState([]) // {id, tier, cityId, progress, max}
@@ -111,6 +111,11 @@ export default function App(){
   const [siloQueue, setSiloQueue] = useState([]) // {id, cityId, progress, max}
   const [nukes, setNukes] = useState([]) // {id, startX,startY,endX,endY,progress,targetCityId}
   const [explosions, setExplosions] = useState([]) // {id,x,y,t}
+  const [craters, setCraters] = useState([]) // {id,x,y,radius,createdAt, citiesDestroyed: [cityId]}
+  const [lastWarEnd, setLastWarEnd] = useState(null) // Date
+  const [waypoints, setWaypoints] = useState([]) // [{x,y}]
+  const [isPathMode, setIsPathMode] = useState(false)
+  const [selectedArmy, setSelectedArmy] = useState([]) // array of unit ids? or 'all'
   const tickRef = useRef(null)
   const techBonuses = calcTechBonuses(techLevels)
 
@@ -179,7 +184,9 @@ export default function App(){
         cityId: city.id, owner:'player', amount: 100000,
         x: city.x + (k*8 - 8) + Math.random()*4,
         y: city.y + 14 + Math.random()*6,
-        hp: 100
+        targetX: city.x + (k*8 - 8),
+        targetY: city.y + 14,
+        hp: 100, path: null
       }))
     })
     // also bots divisions
@@ -226,7 +233,7 @@ export default function App(){
           setDivisions(d=> d.length>22 ? d : [...d, {
             id:`div-auto-${Date.now()}-${Math.random()}`,
             cityId: city.id, owner:'player', amount: 85000+Math.floor(Math.random()*30000),
-            x: city.x + (Math.random()*16-8), y: city.y + 12 + Math.random()*8, hp:100
+            x: city.x + (Math.random()*16-8), y: city.y + 12 + Math.random()*8, targetX: city.x, targetY: city.y+12, hp:100, path:null
           }])
           const spawnCost = Math.max(4000, 8000 - spawnBonus*30)
           setResources(r=> ({...r, manpower: r.manpower - spawnCost}))
@@ -271,6 +278,7 @@ export default function App(){
             setResources(r=> ({...r, money: r.money + 150_000_000, pp: Math.min(500, r.pp+5), stability: Math.min(500, r.stability+2)}))
             pushNotif(`Captured ${city.name} ✕ — Elfoglalva: ${city.name} (${city.countryName})!`, 'ok')
             addTicker(`Captured ${city.name} ✕ — ${COUNTRIES.find(c=>c.id===myCountryId)?.name} takes ${city.countryName}`)
+            setLastWarEnd(new Date(gameDate))
             // spawn divisions at captured city
             setDivisions(d=> [...d.slice(-18), {
               id:`div-cap-${Date.now()}`, cityId: city.id, owner:'player', amount: 100000, x: city.x +4, y: city.y+10, hp:100
@@ -306,12 +314,22 @@ export default function App(){
         }
         return remaining
       })
-      // TANK MOVEMENT
+      // TANK MOVEMENT - path-aware (waypoint)
       setTanks(ts=> ts.map(t=>{
-        const dx = t.targetX - t.x
-        const dy = t.targetY - t.y
+        if(!t.targetX && !t.path) return {...t, rotation: t.rotation}
+        let tx=t.targetX, ty=t.targetY
+        if(t.path && t.path.length) { tx=t.path[0].x; ty=t.path[0].y }
+        const dx = tx - t.x
+        const dy = ty - t.y
         const dist = Math.sqrt(dx*dx + dy*dy)
-        if(dist < 1.5) return {...t, rotation: t.rotation}
+        if(dist < 1.5){
+          if(t.path && t.path.length>1){
+            const np = t.path.slice(1)
+            return {...t, path: np, targetX: np[0].x, targetY: np[0].y}
+          }
+          if(t.path && t.path.length===1) return {...t, path: null, targetX: null, targetY: null}
+          return {...t, rotation: t.rotation}
+        }
         const stats = getTankStats(t.tier, calcTechBonuses(techLevels))
         const step = stats.speed * 0.1
         const nx = t.x + (dx/dist)* Math.min(step, dist)
@@ -347,12 +365,19 @@ export default function App(){
         }
         return remaining
       })
-      // SHIP MOVEMENT - vízen gyorsabb
+      // SHIP MOVEMENT - path-aware
       setShips(ss=> ss.map(t=>{
-        const dx = t.targetX - t.x
-        const dy = t.targetY - t.y
+        if(!t.targetX && !t.path) return t
+        let tx=t.targetX, ty=t.targetY
+        if(t.path && t.path.length) { tx=t.path[0].x; ty=t.path[0].y }
+        const dx = tx - t.x
+        const dy = ty - t.y
         const dist = Math.sqrt(dx*dx + dy*dy)
-        if(dist < 1.2) return t
+        if(dist < 1.2){
+          if(t.path && t.path.length>1){ const np=t.path.slice(1); return {...t, path:np, targetX: np[0].x, targetY: np[0].y}}
+          if(t.path && t.path.length===1) return {...t, path:null, targetX:null, targetY:null}
+          return t
+        }
         const stats = getShipStats(t.tier, calcTechBonuses(techLevels))
         const step = stats.speed * 0.1
         const nx = t.x + (dx/dist)* Math.min(step, dist)
@@ -387,12 +412,19 @@ export default function App(){
         }
         return remaining
       })
-      // PLANE MOVEMENT - leggyorsabb
+      // PLANE MOVEMENT - path-aware
       setPlanes(ps=> ps.map(t=>{
-        const dx = t.targetX - t.x
-        const dy = t.targetY - t.y
+        if(!t.targetX && !t.path) return t
+        let tx=t.targetX, ty=t.targetY
+        if(t.path && t.path.length) { tx=t.path[0].x; ty=t.path[0].y }
+        const dx = tx - t.x
+        const dy = ty - t.y
         const dist = Math.sqrt(dx*dx + dy*dy)
-        if(dist < 1.5) return t
+        if(dist < 1.5){
+          if(t.path && t.path.length>1){ const np=t.path.slice(1); return {...t, path:np, targetX:np[0].x, targetY:np[0].y}}
+          if(t.path && t.path.length===1) return {...t, path:null, targetX:null, targetY:null}
+          return t
+        }
         const stats = getPlaneStats(t.tier, calcTechBonuses(techLevels))
         const step = stats.speed * 0.1
         const nx = t.x + (dx/dist)* Math.min(step, dist)
@@ -473,18 +505,43 @@ export default function App(){
         }
         return remaining
       })
-      // AA MOVEMENT - lassabb, védő pozíció
+      // AA MOVEMENT - path-aware
       setAAs(aa=> aa.map(a=>{
-        const dx = a.targetX - a.x
-        const dy = a.targetY - a.y
+        if(!a.targetX && !a.path) return a
+        let tx=a.targetX, ty=a.targetY
+        if(a.path && a.path.length) { tx=a.path[0].x; ty=a.path[0].y }
+        const dx = tx - a.x
+        const dy = ty - a.y
         const dist = Math.sqrt(dx*dx + dy*dy)
-        if(dist < 1) return a
+        if(dist < 1){
+          if(a.path && a.path.length>1){ const np=a.path.slice(1); return {...a, path:np, targetX:np[0].x, targetY:np[0].y}}
+          if(a.path && a.path.length===1) return {...a, path:null, targetX:null, targetY:null}
+          return a
+        }
         const stats = getAAStats(a.tier, calcTechBonuses(techLevels))
         const step = (stats.range/4 + 5) * 0.06 // lassabb mozgás, de tech hat rá
         const nx = a.x + (dx/dist)* Math.min(step, dist)
         const ny = a.y + (dy/dist)* Math.min(step, dist)
         const angle = Math.atan2(dy,dx)*180/Math.PI
         return {...a, x: nx, y: ny, rotation: angle*0.3, stats}
+      }))
+      // DIVISION MOVEMENT - infantry path-aware (lassabb)
+      setDivisions(ds=> ds.map(d=>{
+        if(!d.targetX && !d.path) return d
+        let tx=d.targetX ?? d.x, ty=d.targetY ?? d.y
+        if(d.path && d.path.length) { tx=d.path[0].x; ty=d.path[0].y }
+        const dx = tx - d.x
+        const dy = ty - d.y
+        const dist = Math.sqrt(dx*dx + dy*dy)
+        if(dist < 1.2){
+          if(d.path && d.path.length>1){ const np=d.path.slice(1); return {...d, path:np, targetX:np[0].x, targetY:np[0].y}}
+          if(d.path && d.path.length===1) return {...d, path:null, targetX:null, targetY:null}
+          return d
+        }
+        const step = 0.9 // gyalogság lassabb mint tank
+        const nx = d.x + (dx/dist)* Math.min(step, dist)
+        const ny = d.y + (dy/dist)* Math.min(step, dist)
+        return {...d, x: nx, y: ny}
       }))
       // AA vs PLANES - auto intercepts enemy planes
       aas.forEach(aa=>{
@@ -528,40 +585,54 @@ export default function App(){
         }
         return remaining
       })
-      // NUKES FLIGHT
+      // NUKES FLIGHT - kráter zóna tech növeli, senki földje
       setNukes(ns=>{
         if(ns.length===0) return ns
         const next=[]
         for(const n of ns){
           const np = n.progress + 0.018 // ~5.5s repülés
           if(np >= 1){
-            // impact
             const city = cities.find(c=> c.id===n.targetCityId)
             if(city){
-              // massive effect: város semleges lesz, védelem/gazdaság 1, minden egység törlődik
-              setOwners(o=>{
-                const no={...o}
-                // find all cities of target country
-                const countryCities = cities.filter(cc=> cc.countryId===city.countryId)
-                countryCities.forEach(cc=> { if(no[cc.id]) delete no[cc.id] })
-                return no
-              })
-              setCities(cs=> cs.map(cc=> cc.countryId===city.countryId ? {...cc, defense:1, economy:1} : cc))
-              // törlés: minden egység a cél országban
-              const isInBlast = (obj)=> {
-                const cc = cities.find(c=> c.id===obj.cityId)
-                return cc && cc.countryId===city.countryId
+              const baseR = 18
+              const bonus = calcTechBonuses(techLevels).bombRadius
+              const radius = baseR * (1 + bonus/100)
+              // crater senki földje: minden város a sugáron belül elpusztul, nincs épület/város szint (0), mindkét fél gyengül
+              const affected = cities.filter(cc=> Math.hypot(cc.x - n.endX, cc.y - n.endY) < radius)
+              const affectedIds = affected.map(c=> c.id)
+              if(affected.length){
+                setOwners(o=>{
+                  const no={...o}
+                  affected.forEach(a=> { if(no[a.id]) delete no[a.id] })
+                  return no
+                })
+                setCities(cs=> cs.map(cc=> {
+                  if(affectedIds.includes(cc.id)){
+                    return {...cc, defense: 0, economy: 0, destroyed: true}
+                  }
+                  return cc
+                }))
+                const isInBlast = (obj)=> {
+                  if(obj.x!==undefined && obj.y!==undefined){
+                    return Math.hypot(obj.x - n.endX, obj.y - n.endY) < radius
+                  }
+                  const cc = cities.find(c=> c.id===obj.cityId)
+                  if(!cc) return false
+                  return Math.hypot(cc.x - n.endX, cc.y - n.endY) < radius
+                }
+                setDivisions(d=> d.filter(dd=> !isInBlast(dd)))
+                setTanks(tt=> tt.filter(tt=> !isInBlast(tt)))
+                setShips(ss=> ss.filter(ss=> !isInBlast(ss)))
+                setPlanes(pp=> pp.filter(pp=> !isInBlast(pp)))
+                setAAs(aa=> aa.filter(aa=> !isInBlast(aa)))
+                // ments crater
+                setCraters(cr=> [...cr, { id:`crater-${Date.now()}`, x:n.endX, y:n.endY, radius, createdAt: new Date(gameDate), affectedIds }])
+                setLastWarEnd(new Date(gameDate))
               }
-              setDivisions(d=> d.filter(dd=> !isInBlast(dd)))
-              setTanks(tt=> tt.filter(tt=> !isInBlast(tt)))
-              setShips(ss=> ss.filter(ss=> !isInBlast(ss)))
-              setPlanes(pp=> pp.filter(pp=> !isInBlast(pp)))
-              setAAs(aa=> aa.filter(aa=> !isInBlast(aa)))
-              // vizuális robbanás
-              setExplosions(e=> [...e, {id:Date.now()+Math.random(), x:n.endX, y:n.endY, t:0}])
-              pushNotif(`☢️ ATOMBOMBA: ${city.name} elpusztítva! Ország semleges lett.`, 'warn')
-              addTicker(`☢️ BREAKING: ATOMBOMBA ${city.name}-ra! — ${city.countryName} megsemmisült!`)
-              setTimeout(()=> setExplosions(e=> e.slice(1)), 2500)
+              setExplosions(e=> [...e, {id:Date.now()+Math.random(), x:n.endX, y:n.endY, t:0, radius}])
+              pushNotif(`☢️ ATOMBOMBA: ${city.name} — ${affected.length} város senki földje lett! Radius ${radius.toFixed(0)}`, 'warn')
+              addTicker(`☢️ ATOM: ${city.name} kráter ${radius.toFixed(0)}px — senki földje!`)
+              setTimeout(()=> setExplosions(e=> e.slice(1)), 2600)
             }
           } else {
             next.push({...n, progress: np})
@@ -571,6 +642,26 @@ export default function App(){
       })
       // explosion anim tick
       setExplosions(e=> e.map(ex=> ({...ex, t: ex.t+0.1})).filter(ex=> ex.t<2.2))
+      // CRATER REBUILD - csak békeidőben 2 hónap után
+      if(craters.length>0 && !war && !captureWar && nukes.length===0){
+        // peace check: 2 hónap ~60 nap
+        const twoMonthsMs = 60*24*60*60*1000
+        const now = gameDate.getTime()
+        const lastWar = lastWarEnd ? lastWarEnd.getTime() : 0
+        const peaceOk = !lastWarEnd || (now - lastWar > twoMonthsMs)
+        if(peaceOk){
+          const rebuildable = craters.filter(cr=> (now - new Date(cr.createdAt).getTime()) >= twoMonthsMs)
+          if(rebuildable.length){
+            rebuildable.forEach(cr=>{
+              setCities(cs=> cs.map(c=> cr.affectedIds.includes(c.id) ? {...c, defense:1, economy:1, destroyed:false} : c))
+              pushNotif(`🏗️ Újjáépülés: ${cr.affectedIds.length} város újraépült békeidőben (2 hónap)!`, 'ok')
+              addTicker(`Újjáépülés: kráter ${cr.radius.toFixed(0)}px helyreállt — béke 2 hónap!`)
+            })
+            setCraters(cr=> cr.filter(c=> !rebuildable.find(r=> r.id===c.id)))
+            setLastWarEnd(new Date(gameDate))
+          }
+        }
+      }
 
       // random bot ticker
       if(Math.random()<0.006 && bots.length){
@@ -587,6 +678,7 @@ export default function App(){
     const targetOwner = owners[targetCity.id]
     if(targetOwner==='player') return pushNotif('Saját várost nem támadhatsz!', 'warn')
     if(resources.pp < 50) return pushNotif('Nincs elég Political Power! (50PP kell)', 'warn')
+    setLastWarEnd(null) // háború megszakítja békét, újjáépítés blokkolva
     setResources(r=> ({...r, pp: r.pp - 50, stability: r.stability - 3}))
     const isFirst = warsDone===0
     const max = isFirst ? 10 : 30
@@ -611,6 +703,7 @@ export default function App(){
     const refund = war.phase==='declaration' ? 35 : 0
     setResources(r=> ({...r, pp: Math.min(500, r.pp + refund)}))
     setWar(null)
+    setLastWarEnd(new Date(gameDate))
     pushNotif('Hadüzenet visszavonva.', 'info')
   }
 
@@ -706,6 +799,37 @@ export default function App(){
     setAAs(aa=> aa.map(a=> a.id===aaId ? {...a, targetX: targetCity.x + (Math.random()*10-5), targetY: targetCity.y + 6 + Math.random()*5} : a))
     pushNotif(`AA parancs: ${targetCity.name}-ba telepítés`, 'info')
   }
+  function startPathMode(){
+    const allUnits = tanks.filter(t=> t.owner==='player').length + ships.filter(s=> s.owner==='player').length + planes.filter(p=> p.owner==='player').length + divisions.filter(d=> d.owner==='player').length
+    if(allUnits===0) return pushNotif('Nincs mozgatható egységed! Gyárts tankot/hajót/repülőt.', 'warn')
+    setIsPathMode(true)
+    setWaypoints([])
+    pushNotif('Útvonal rajzolás: kattints a térképre pontokat, végén pont lesz. Hosszabb útvonal: több kattintás. Majd "Csapatok mozgósítása" megerősítés!', 'info')
+  }
+  function addWaypoint(x,y){
+    if(!isPathMode) return
+    setWaypoints(w=> [...w, {x,y}])
+  }
+  function confirmMobilization(){
+    if(waypoints.length===0) return pushNotif('Nincs útvonal! Kattints térképre.', 'warn')
+    // minden saját egység kapja az útvonalat (klón)
+    const path = [...waypoints]
+    // tankok
+    setTanks(ts=> ts.map(t=> t.owner==='player' ? {...t, path: [...path], targetX: path[0].x, targetY: path[0].y} : t))
+    setShips(ss=> ss.map(s=> s.owner==='player' ? {...s, path: [...path], targetX: path[0].x, targetY: path[0].y} : s))
+    setPlanes(ps=> ps.map(p=> p.owner==='player' ? {...p, path: [...path], targetX: path[0].x, targetY: path[0].y} : p))
+    // gyalogság: mozgatjuk pozíciót is (lassabb)
+    setDivisions(ds=> ds.map(d=> d.owner==='player' ? {...d, path: [...path], targetX: path[0].x, targetY: path[0].y} : d))
+    pushNotif(`Csapatok mozgósítva! ${path.length} pont, ${tanks.filter(t=>t.owner==='player').length + ships.filter(s=>s.owner==='player').length + planes.filter(p=>p.owner==='player').length} egység úton!`, 'ok')
+    addTicker(`Mozgósítás: ${path.length} pontos útvonalra indultak a csapatok!`)
+    setIsPathMode(false)
+    setWaypoints([])
+  }
+  function cancelPath(){
+    setIsPathMode(false)
+    setWaypoints([])
+    pushNotif('Útvonal törölve.', 'info')
+  }
   function moveShipTo(shipId, targetCity){
     setShips(ss=> ss.map(s=> s.id===shipId ? {...s, targetX: targetCity.x + (Math.random()*12-6), targetY: targetCity.y + (Math.random()*8-4)} : s))
     pushNotif(`Hajó parancs: ${targetCity.name} felé`, 'info')
@@ -739,7 +863,12 @@ export default function App(){
   const econIncomePerSec = (()=>{ const owned = cities.filter(c=> owners[c.id]==='player'); const sum = owned.reduce((a,c)=>a+c.economy,0); return (4_000_000 + sum*6_500_000) * (1 + techBonuses.taxGain/100) })()
   const manIncomePerSec = (()=>{ const owned = cities.filter(c=> owners[c.id]==='player'); const sum = owned.reduce((a,c)=>a+c.defense,0); return (400 + sum*180) * (1 + techBonuses.manpowerGain/100) })()
   const ppPerSec = (0.55 + ownedCount*0.12 + techBonuses.ppPerSec)
-  const dateStr = gameDate.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })
+  const dateStr = gameDate.toLocaleDateString('hu-HU', { year:'numeric', month:'long', day:'numeric' })
+  const dayNum = gameDate.getDate()
+  const monthNum = gameDate.getMonth()+1
+  const yearNum = gameDate.getFullYear()
+  const timeStr = `${dayNum}. ${gameDate.toLocaleDateString('hu-HU',{month:'long'})} ${yearNum}` // nap hónap év
+  const numericDate = `${dayNum}/${monthNum}/${yearNum}`
 
   return (
     <div className="app">
@@ -750,12 +879,12 @@ export default function App(){
             <div className="res money" style={resources.money<0? {color:'#ff4d4d'}:{}} title={`Bevétel: ${formatMoney(econIncomePerSec)}/s`}>{resources.money<0?'💸':'💰'} {formatMoney(resources.money)} <span className="inc">+{formatMoney(econIncomePerSec)}/s</span></div>
             <div className="res man">🪖 {formatManpower(resources.manpower)} <span className="inc">+{Math.round(manIncomePerSec)}/s</span></div>
             <div className="res pp">🏛️ {resources.stability.toFixed(1)} <span className="inc">PP {Math.floor(resources.pp)} +{ppPerSec.toFixed(2)}/s</span></div>
-            <div className="res" style={{background:'#0e1a30'}}>📅 {dateStr}</div>
+            <div className="res" style={{background:'#0e1a30'}} title={timeStr}>📅 {numericDate} <span style={{opacity:0.7, fontSize:11}}>({dateStr})</span></div>
             <div className="res cities">🏙️ {ownedCount}/{totalCities} {techBonuses.soldierDamage>0 && <span className="tech-quick">⚔️+{techBonuses.soldierDamage.toFixed(0)}%</span>}</div>
           </div>
         )}
         <div className="header-actions">
-          {view==='game' && <button className="btn primary tech-btn" onClick={()=> setShowTech(true)}>🧪 Tech <span className="badge-dot">{Object.values(techLevels).reduce((a,b)=>a+b,0)}/16</span></button>}
+          {view==='game' && <button className="btn primary tech-btn" onClick={()=> setShowTech(true)}>🧪 Tech <span className="badge-dot">{Object.values(techLevels).reduce((a,b)=>a+b,0)}/20</span></button>}
           {view!=='servers' && <button className="btn ghost" onClick={()=> { setView('servers'); setWar(null); setCaptureWar(null)}}>Kilépés</button>}
           <div className="player-badge">👤 {playerName}</div>
         </div>
@@ -865,12 +994,31 @@ export default function App(){
       {view==='game' && (
         <div className="game-layout">
           <div className="map-area">
-            <div className="map-head">
+            <div className="map-head" style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
               <span>Hadszíntér: Európa • Szerver: {currentServer?.name} • Te: <b style={{color:'#2ecc71'}}>{COUNTRIES.find(c=>c.id===myCountryId)?.name}</b></span>
-              <span className="legend"><i className="dot own"></i> saját <i className="dot enemy"></i> ellenség <i className="dot neutral"></i> semleges</span>
+              <span style={{display:'flex',gap:'6px',alignItems:'center'}}>
+                {!isPathMode ? (
+                  <button className="btn primary" onClick={startPathMode} title="Rajzolj útvonalat a térképen kattintással, lehet hosszú több ponttal">🚩 Csapatok mozgósítása</button>
+                ) : (
+                  <>
+                    <span style={{fontSize:'11px',fontWeight:'800',color:'#f1c40f'}}>{waypoints.length} pont</span>
+                    <button className="btn ok" onClick={confirmMobilization} style={{background:'#27ae60',color:'#fff'}}>✓ Mozgósítás megerősítése</button>
+                    <button className="btn ghost" onClick={cancelPath}>✕ Mégse</button>
+                    {waypoints.length>0 && <button className="btn ghost" onClick={()=> setWaypoints(w=> w.slice(0,-1))} title="Utolsó pont törlése">↩︎ Vissza</button>}
+                  </>
+                )}
+                <span className="legend" style={{marginLeft:'8px'}}><i className="dot own"></i> saját <i className="dot enemy"></i> ellenség <i className="dot neutral"></i> semleges</span>
+              </span>
             </div>
             <div className="map-wrap" style={{position:'relative', overflow:'hidden'}}>
-              <svg viewBox="0 0 700 520" className="europe-svg">
+              <svg viewBox="0 0 700 520" className="europe-svg" onClick={(e)=>{
+                  if(!isPathMode) return
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const x = (e.clientX - rect.left) / rect.width * 700
+                  const y = (e.clientY - rect.top) / rect.height * 520
+                  // ne trigger city click-en, de ez svg background - city buborék már stopPropagation
+                  addWaypoint(x,y)
+                }} style={{cursor: isPathMode ? 'crosshair' : 'default'}}>
                 <defs>
                   <pattern id="lowpoly-sea" width="18" height="18" patternUnits="userSpaceOnUse" patternTransform="rotate(15)">
                     <rect width="18" height="18" fill="#0d2a52"/>
@@ -927,6 +1075,7 @@ export default function App(){
                   if(isOwn) { cityFill='#fff'; cityStroke='#27ae60' }
                   else if(isEnemy) { cityFill='#e0e0e0'; cityStroke='#c0392b' }
                   const handleClick = (e)=>{
+                    if(isPathMode){ e.stopPropagation(); addWaypoint(city.x, city.y); return }
                     if(selectedTankId){
                       const tank = tanks.find(t=> t.id===selectedTankId)
                       if(tank) { moveTankTo(selectedTankId, city); setSelectedTankId(null); return }
@@ -1037,6 +1186,29 @@ export default function App(){
                     </g>
                   )
                 })}
+                {/* WAYPOINT PATH - vonal + pont (path drawing) */}
+                {waypoints.length>0 && (
+                  <g>
+                    <polyline points={waypoints.map(p=> `${p.x},${p.y}`).join(' ')} fill="none" stroke="#f1c40f" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" strokeDasharray="6 3" opacity="0.95" filter="url(#blockShadow)"/>
+                    {waypoints.map((p,i)=> (
+                      <g key={i}>
+                        {i>0 && <line x1={waypoints[i-1].x} y1={waypoints[i-1].y} x2={p.x} y2={p.y} stroke="#f1c40f" strokeWidth="2" strokeDasharray="4 2"/>}
+                        <circle cx={p.x} cy={p.y} r={i===waypoints.length-1?5:3.5} fill={i===waypoints.length-1 ? '#e74c3c' : '#f1c40f'} stroke="#000" strokeWidth="1" opacity="0.95"/>
+                        <text x={p.x} y={p.y-7} textAnchor="middle" fontSize="6" fontWeight="900" fill="#fff" stroke="#000" strokeWidth="0.4">{i+1}</text>
+                      </g>
+                    ))}
+                  </g>
+                )}
+                {isPathMode && <text x="350" y="18" textAnchor="middle" fontSize="7" fontWeight="900" fill="#f1c40f" stroke="#000" strokeWidth="0.5">✏️ ÚTVONAL RAJZOLÁS: kattintás = pont • lehet hosszú útvonal több kattintás</text>}
+                {/* CRATERS - senki földje zóna */}
+                {craters.map(cr=> (
+                  <g key={cr.id} opacity="0.55">
+                    <circle cx={cr.x} cy={cr.y} r={cr.radius} fill="#1a1a1a" stroke="#000" strokeWidth="2" strokeDasharray="6 3"/>
+                    <circle cx={cr.x} cy={cr.y} r={cr.radius*0.7} fill="#2c2c2c" stroke="#444" strokeWidth="0.8" opacity="0.6"/>
+                    <text x={cr.x} y={cr.y} textAnchor="middle" fontSize="7" fontWeight="900" fill="#e74c3c" stroke="#fff" strokeWidth="0.4">☢️ SENKI FÖLDJE</text>
+                    <text x={cr.x} y={cr.y+8} textAnchor="middle" fontSize="5.5" fill="#ffeb3b" stroke="#000" strokeWidth="0.3">újraépítés 2 hónap béke után</text>
+                  </g>
+                ))}
                 {/* SILOS - atom silók */}
                 {Object.entries(silos).map(([cityId, silo])=>{
                   if(!silo.built) return null
@@ -1312,7 +1484,8 @@ export default function App(){
                 <div>🚛 Tank: +{techBonuses.tankDamage.toFixed(1)}% dmg, +{techBonuses.tankSpeed}% sebesség</div>
                 <div>💥 Minden: +{techBonuses.allDamage}% • 💰 Adó +{techBonuses.taxGain}% • 👥 Manpower +{techBonuses.manpowerGain}%</div>
                 <div>⚙️ Spawn +{techBonuses.armySpawnSpeed}% • 🏛️ +{techBonuses.ppPerSec.toFixed(2)} PP/s</div>
-                <button className="btn small primary" onClick={()=> setShowTech(true)} style={{marginTop:6}}>Megnyitás — {Object.values(techLevels).reduce((a,b)=>a+b,0)}/16 kutatva</button>
+                <div>☢️ Atombomba kráter: +{techBonuses.bombRadius}% sugár {techLevels.bomb>0 && <span style={{color:'#e74c3c'}}>({techLevels.bomb}/4 lvl)</span>}</div>
+                <button className="btn small primary" onClick={()=> setShowTech(true)} style={{marginTop:6}}>Megnyitás — {Object.values(techLevels).reduce((a,b)=>a+b,0)}/20 kutatva</button>
               </div>
             </div>
 
@@ -1336,7 +1509,7 @@ export default function App(){
       )}
 
       <div className="notif-stack">{notifs.map(n=> <div key={n.id} className={`notif ${n.type} ${n.text.includes('Captured')?'breaking':''}`}>{n.text}</div>)}</div>
-      <footer className="foot">Területfoglaló — Európa Hadszíntér • LOW POLY + TECH TREE • v0.4.0 • MAX TECHNOLOGY = MAX POWER (kiegyensúlyozott) • Roblox inspirálta de saját név</footer>
+      <footer className="foot">Területfoglaló — Európa Hadszíntér • LOW POLY + TECH TREE + ATOM KRÁTER + ÚTVONAL • v0.5.0 • MAX TECHNOLOGY = MAX POWER (kiegyensúlyozott) • Roblox inspirálta de saját név</footer>
     </div>
   )
 }

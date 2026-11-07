@@ -47,7 +47,19 @@ export const TECH_TREE = {
       { tier: 'III', cost: 1_230_000_000, bonus: '+0.08 PP/s', desc: 'Stabilitás' },
       { tier: 'IV', cost: 2_470_000_000, bonus: '+0.07 PP/s +5% minden sebzés', desc: 'Total War' },
     ],
-    maxBonus: { ppPerSec: 0.30, allDamage: 5 } // original 0.445 PP/s +13% all damage -> nerfed 0.30 +5%
+    maxBonus: { ppPerSec: 0.30, allDamage: 5 }
+  },
+  bomb: {
+    name: 'Atombomba',
+    icon: '☢️',
+    color: '#e74c3c',
+    levels: [
+      { tier: 'I', cost: 450_000_000, bonus: '+8% kráter sugár', desc: 'Taktikai atom' },
+      { tier: 'II', cost: 890_000_000, bonus: '+12% kráter sugár', desc: 'Harcászati fej' },
+      { tier: 'III', cost: 1_500_000_000, bonus: '+18% kráter sugár', desc: 'Termonukleáris' },
+      { tier: 'IV', cost: 2_800_000_000, bonus: '+25% kráter sugár', desc: 'Armageddon' },
+    ],
+    maxBonus: { bombRadius: 63 } // +63% sugár összesen
   }
 }
 
@@ -61,12 +73,12 @@ export const TECH_BONUS_SUMMARY = {
   manpowerGain: 10,
   armySpawnSpeed: 15,
   taxGain: 13,
-  ppPerSec: 0.30
+  ppPerSec: 0.30,
+  bombRadius: 63
 }
 
 export function calcTechBonuses(techLevels){
-  // techLevels: {soldier:0-4, tank:0-4, economy:0-4, political:0-4}
-  let b = { soldierDamage:0, soldierSpeed:0, tankDamage:0, tankSpeed:0, allDamage:0, manpowerGain:0, armySpawnSpeed:0, taxGain:0, ppPerSec:0 }
+  let b = { soldierDamage:0, soldierSpeed:0, tankDamage:0, tankSpeed:0, allDamage:0, manpowerGain:0, armySpawnSpeed:0, taxGain:0, ppPerSec:0, bombRadius:0 }
   // soldier
   if(techLevels.soldier>=1) b.soldierDamage+=2.5
   if(techLevels.soldier>=2) b.soldierDamage+=3.5
@@ -87,6 +99,12 @@ export function calcTechBonuses(techLevels){
   if(techLevels.political>=2) b.ppPerSec+=0.08
   if(techLevels.political>=3) b.ppPerSec+=0.08
   if(techLevels.political>=4) { b.ppPerSec+=0.07; b.allDamage+=5 }
+  // bomb - kráter sugár
+  const br = techLevels.bomb || 0
+  if(br>=1) b.bombRadius+=8
+  if(br>=2) b.bombRadius+=12
+  if(br>=3) b.bombRadius+=18
+  if(br>=4) b.bombRadius+=25
   return b
 }
 
@@ -94,5 +112,6 @@ export const TECH_COSTS = {
   soldier: [74200000, 371000000, 1230000000, 2360000000],
   tank: [61800000, 296800000, 618400000, 1230000000],
   economy: [74200000, 371000000, 989500000, 2360000000],
-  political: [74200000, 371000000, 1230000000, 2470000000]
+  political: [74200000, 371000000, 1230000000, 2470000000],
+  bomb: [450000000, 890000000, 1500000000, 2800000000]
 }
