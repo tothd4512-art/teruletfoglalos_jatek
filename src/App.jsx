@@ -11,6 +11,9 @@ import { PLANE_TIERS, getPlaneStats } from './planeData.js'
 import LowPolyPlane from './LowPolyPlane.jsx'
 import { AA_TIERS, getAAStats } from './aaData.js'
 import LowPolyAntiAir from './LowPolyAntiAir.jsx'
+import { NUKE_COST, SILO_COST } from './nukeData.js'
+import LowPolySilo from './LowPolySilo.jsx'
+import LowPolyNuke from './LowPolyNuke.jsx'
 import './App.css'
 
 const STORAGE_SERVERS = 'tf_servers_v2'
@@ -104,6 +107,10 @@ export default function App(){
   const [aas, setAAs] = useState([]) // anti-air
   const [aaQueue, setAAQueue] = useState([])
   const [selectedAAId, setSelectedAAId] = useState(null)
+  const [silos, setSilos] = useState({}) // cityId -> {built:true, progress:8}
+  const [siloQueue, setSiloQueue] = useState([]) // {id, cityId, progress, max}
+  const [nukes, setNukes] = useState([]) // {id, startX,startY,endX,endY,progress,targetCityId}
+  const [explosions, setExplosions] = useState([]) // {id,x,y,t}
   const tickRef = useRef(null)
   const techBonuses = calcTechBonuses(techLevels)
 
@@ -181,7 +188,7 @@ export default function App(){
     setDivisions(divs)
     pushNotif(`Beléptél mint ${country.name} — főváros: ${country.capital} — sok sikert, ${playerName}!`, 'ok')
     addTicker(`BREAKING NEWS: ${country.name} just joined ${currentServer?.name || 'EU Hadszíntér #1'}`)
-    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null); setPlanes([]); setPlaneQueue([]); setSelectedPlaneId(null); setAAs([]); setAAQueue([]); setSelectedAAId(null)
+    setTanks([]); setTankQueue([]); setSelectedTankId(null); setShips([]); setShipQueue([]); setSelectedShipId(null); setPlanes([]); setPlaneQueue([]); setSelectedPlaneId(null); setAAs([]); setAAQueue([]); setSelectedAAId(null); setSilos({}); setSiloQueue([]); setNukes([]); setExplosions([])
   }
 
   // Game loop
@@ -505,6 +512,66 @@ export default function App(){
       // cleanup dead planes
       setPlanes(ps=> ps.filter(p=> p.hp>0))
 
+      // SILO QUEUE
+      setSiloQueue(q=>{
+        if(q.length===0) return q
+        let newQ = q.map(i=> ({...i, progress: i.progress + 0.1}))
+        const finished = newQ.filter(i=> i.progress >= i.max)
+        const remaining = newQ.filter(i=> i.progress < i.max)
+        if(finished.length){
+          finished.forEach(f=>{
+            setSilos(s=> ({...s, [f.cityId]: {built:true}}))
+            const city = cities.find(c=> c.id===f.cityId)
+            pushNotif(`Siló kész: ${city?city.name:'bázis'} — atom készenlét! ☢️`, 'ok')
+            addTicker(`BREAKING NEWS: ${city?city.name:'Siló'} — atom siló hadrendbe állt!`)
+          })
+        }
+        return remaining
+      })
+      // NUKES FLIGHT
+      setNukes(ns=>{
+        if(ns.length===0) return ns
+        const next=[]
+        for(const n of ns){
+          const np = n.progress + 0.018 // ~5.5s repülés
+          if(np >= 1){
+            // impact
+            const city = cities.find(c=> c.id===n.targetCityId)
+            if(city){
+              // massive effect: város semleges lesz, védelem/gazdaság 1, minden egység törlődik
+              setOwners(o=>{
+                const no={...o}
+                // find all cities of target country
+                const countryCities = cities.filter(cc=> cc.countryId===city.countryId)
+                countryCities.forEach(cc=> { if(no[cc.id]) delete no[cc.id] })
+                return no
+              })
+              setCities(cs=> cs.map(cc=> cc.countryId===city.countryId ? {...cc, defense:1, economy:1} : cc))
+              // törlés: minden egység a cél országban
+              const isInBlast = (obj)=> {
+                const cc = cities.find(c=> c.id===obj.cityId)
+                return cc && cc.countryId===city.countryId
+              }
+              setDivisions(d=> d.filter(dd=> !isInBlast(dd)))
+              setTanks(tt=> tt.filter(tt=> !isInBlast(tt)))
+              setShips(ss=> ss.filter(ss=> !isInBlast(ss)))
+              setPlanes(pp=> pp.filter(pp=> !isInBlast(pp)))
+              setAAs(aa=> aa.filter(aa=> !isInBlast(aa)))
+              // vizuális robbanás
+              setExplosions(e=> [...e, {id:Date.now()+Math.random(), x:n.endX, y:n.endY, t:0}])
+              pushNotif(`☢️ ATOMBOMBA: ${city.name} elpusztítva! Ország semleges lett.`, 'warn')
+              addTicker(`☢️ BREAKING: ATOMBOMBA ${city.name}-ra! — ${city.countryName} megsemmisült!`)
+              setTimeout(()=> setExplosions(e=> e.slice(1)), 2500)
+            }
+          } else {
+            next.push({...n, progress: np})
+          }
+        }
+        return next
+      })
+      // explosion anim tick
+      setExplosions(e=> e.map(ex=> ({...ex, t: ex.t+0.1})).filter(ex=> ex.t<2.2))
+
       // random bot ticker
       if(Math.random()<0.006 && bots.length){
         const att = bots[Math.floor(Math.random()*bots.length)]
@@ -513,7 +580,7 @@ export default function App(){
       }
     }, 100)
     return ()=> clearInterval(tickRef.current)
-  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, ships, planes, aas, captureWar, war])
+  }, [view, cities, owners, bots, myCountryId, resources.manpower, techLevels, tanks, ships, planes, aas, nukes, explosions, captureWar, war])
 
   function startWar(targetCity){
     if(war || captureWar) return pushNotif('Már folyamatban van egy hadművelet!', 'warn')
@@ -611,6 +678,29 @@ export default function App(){
     setResources(r=> ({...r, money: r.money - stats.costMoney, manpower: r.manpower - stats.costManpower}))
     setAAQueue(q=> [...q, { id:`aaq-${Date.now()}-${Math.random()}`, tier, cityId: city.id, progress:0, max: stats.buildTime, name: stats.name }])
     pushNotif(`Légvédelem: ${stats.name} A${tier} → ${city.name} (${stats.buildTime}s) 🎯`, 'info')
+  }
+  function buildSilo(city){
+    if(owners[city.id]!=='player') return pushNotif('Csak saját városban építhetsz silót!','warn')
+    if(silos[city.id]?.built) return pushNotif('Itt már van siló!','warn')
+    if(siloQueue.find(q=> q.cityId===city.id)) return pushNotif('Siló már épül itt!','warn')
+    if(resources.money < SILO_COST.money || resources.manpower < SILO_COST.manpower) return pushNotif(`Nincs elég erőforrás silóhoz: ${formatMoney(SILO_COST.money)} + ${formatManpower(SILO_COST.manpower)}`,'warn')
+    setResources(r=> ({...r, money: r.money - SILO_COST.money, manpower: r.manpower - SILO_COST.manpower}))
+    setSiloQueue(q=> [...q, { id:`silo-${Date.now()}`, cityId: city.id, progress:0, max: SILO_COST.buildTime }])
+    pushNotif(`Siló építés: ${city.name} — ${SILO_COST.buildTime}s`, 'info')
+  }
+  function launchNuke(targetCity){
+    if(Object.keys(silos).filter(k=> silos[k]?.built).length===0) return pushNotif('Nincs silód! Előbb építs egyet $1B / 100k manpowerért.','warn')
+    if(resources.money < NUKE_COST.money || resources.manpower < NUKE_COST.manpower) return pushNotif(`Nincs elég erőforrás atomra: ${formatMoney(NUKE_COST.money)} + ${formatManpower(NUKE_COST.manpower)}`,'warn')
+    const targetOwner = owners[targetCity.id]
+    if(targetOwner==='player') return pushNotif('Saját várost nem atomozhatsz!','warn')
+    // válassz egy silót startnak
+    const siloCityId = Object.keys(silos).find(k=> silos[k]?.built)
+    const siloCity = cities.find(c=> c.id===siloCityId)
+    if(!siloCity) return pushNotif('Siló hiba.','warn')
+    setResources(r=> ({...r, money: r.money - NUKE_COST.money, manpower: r.manpower - NUKE_COST.manpower}))
+    setNukes(n=> [...n, { id:`nuke-${Date.now()}`, startX: siloCity.x, startY: siloCity.y, endX: targetCity.x, endY: targetCity.y, progress:0, targetCityId: targetCity.id }])
+    pushNotif(`☢️ ATOM KILÖVÉS: ${siloCity.name} → ${targetCity.name}! 5.5s becsapódás!`, 'warn')
+    addTicker(`☢️ ATOM KILÖVÉS: ${siloCity.name} → ${targetCity.name} — MENEKÜLJ!`)
   }
   function moveAATo(aaId, targetCity){
     setAAs(aa=> aa.map(a=> a.id===aaId ? {...a, targetX: targetCity.x + (Math.random()*10-5), targetY: targetCity.y + 6 + Math.random()*5} : a))
@@ -943,8 +1033,29 @@ export default function App(){
                         <rect x="-8" y="0" width="16" height="2.5" rx="1" fill="rgba(0,0,0,0.6)" stroke="#000" strokeWidth="0.4"/>
                         <rect x="-7.5" y="0.4" width={`${15 * (aa.hp/aa.maxHp)}`} height="1.7" rx="0.8" fill={aa.hp/aa.maxHp>0.5 ? '#27ae60' : aa.hp/aa.maxHp>0.25 ? '#f1c40f' : '#e74c3c'}/>
                       </g>
-                      {/* range circle when selected */}
                       {isSel && <circle cx={aa.x} cy={aa.y} r={aa.stats.range*3} fill="rgba(46,204,113,0.08)" stroke="rgba(46,204,113,0.4)" strokeWidth="0.8" strokeDasharray="3 3"/>}
+                    </g>
+                  )
+                })}
+                {/* SILOS - atom silók */}
+                {Object.entries(silos).map(([cityId, silo])=>{
+                  if(!silo.built) return null
+                  const city = cities.find(c=> c.id===cityId)
+                  if(!city) return null
+                  return <g key={cityId}><LowPolySilo x={city.x-10} y={city.y+12} scale={0.95}/></g>
+                })}
+                {/* NUKES flight */}
+                {nukes.map(n=> <g key={n.id}><LowPolyNuke startX={n.startX} startY={n.startY} endX={n.endX} endY={n.endY} progress={n.progress}/></g>)}
+                {/* EXPLOSIONS */}
+                {explosions.map(ex=>{
+                  const t2 = ex.t
+                  const r = Math.min(45, t2*22)
+                  const opacity = Math.max(0, 1 - t2/2.2)
+                  return (
+                    <g key={ex.id} opacity={opacity}>
+                      <circle cx={ex.x} cy={ex.y} r={r} fill={t2<0.4 ? '#fff' : t2<0.8 ? '#ffeb3b' : t2<1.4 ? '#ff6b35' : '#4a1a0a'} stroke="#000" strokeWidth="1"/>
+                      <circle cx={ex.x} cy={ex.y} r={r*0.6} fill={t2<0.5 ? '#ff6b35' : '#ff4500'} opacity={0.7}/>
+                      {t2>0.3 && <text x={ex.x} y={ex.y- (r+8)} textAnchor="middle" fontSize="7" fontWeight="900" fill="#fff" stroke="#000" strokeWidth="0.5">☢️ BOOM!</text>}
                     </g>
                   )
                 })}
@@ -1152,14 +1263,41 @@ export default function App(){
                         )}
                         {selectedAAId && (()=>{ const aa=aas.find(x=>x.id===selectedAAId); if(!aa) return null; return <div style={{marginTop:8, fontSize:11, background:'rgba(46,204,113,0.15)', padding:6, borderRadius:6, border:'1px solid rgba(46,204,113,0.4)'}}><b>Kiválasztva: AA A{aa.tier}</b> — kattints városra áttelepíteni! <button className="btn ghost small" onClick={()=> setSelectedAAId(null)}>Mégse</button></div>})()}
                       </div>
+                      <div className="panel nuke-factory" style={{marginTop:10, background:'#1a1a1a', border:'2px solid #f1c40f', borderRadius:10, padding:10}}>
+                        <h4 style={{margin:'0 0 6px 0', fontSize:13}}>☢️ ATOM Siló — $1B / 100k manpower</h4>
+                        <p className="muted" style={{fontSize:11}}>Siló telepítés egyszeri $1B+100k, kilövésenként újra $1B+100k! Várost semlegesít, mindent elpusztít.</p>
+                        {silos[selectedCity.id]?.built ? (
+                          <div style={{background:'rgba(241,196,15,0.15)', padding:8, borderRadius:8, border:'1px solid #f1c40f', fontSize:11}}>
+                            <b>✔ Siló kész!</b> Itt: {selectedCity.name} — kész kilövésre.<br/>
+                            <span className="muted">Költség/kilövés: {formatMoney(NUKE_COST.money)} + {formatManpower(NUKE_COST.manpower)}</span><br/>
+                            <span className="muted">Összes siló: {Object.keys(silos).filter(k=> silos[k].built).length} • Repülés: 5.5s</span>
+                          </div>
+                        ) : siloQueue.find(q=> q.cityId===selectedCity.id) ? (
+                          (()=>{ const q=siloQueue.find(qq=> qq.cityId===selectedCity.id); return <div style={{background:'rgba(0,0,0,0.3)', padding:6, borderRadius:6, fontSize:11}}><b>Siló épül...</b> {q.progress.toFixed(1)}/{q.max}s <div className="progress" style={{height:6}}><div className="fill" style={{width:`${(q.progress/q.max)*100}%`, background:'#f1c40f'}}></div></div></div>})()
+                        ) : (
+                          <button className="btn primary small" style={{background:'#f1c40f', color:'#000', borderColor:'#d4ac0d', width:'100%', marginTop:6}} disabled={resources.money < SILO_COST.money || resources.manpower < SILO_COST.manpower} onClick={()=> buildSilo(selectedCity)}>🏗️ Siló telepítése — $1B + 100k</button>
+                        )}
+                        <div style={{marginTop:8, fontSize:10, background:'rgba(0,0,0,0.3)', padding:6, borderRadius:6}}>
+                          <b>Tipp:</b> Nukes bárhova lőhet! Válassz ellenséges várost lent: ha van silód, megjelenik a piros ATOM gomb.
+                        </div>
+                        {nukes.length>0 && <div style={{marginTop:6, fontSize:11, color:'#f1c40f', fontWeight:800}}>🚀 {nukes.length} atom úton! Készülj becsapódásra! ☢️</div>}
+                      </div>
                     </>
                   ) : (
                     <div className="attack-box">
-                      <p>Ellenséges low poly város — küldd rá a blokk katonáidat és tankjaidat!</p>
+                      <p>Ellenséges low poly város — küldd rá a blokk katonáidat, tankjaidat, hajóidat, repülőidet!</p>
                       <div className="cost">Költség: <b>50 PP</b> + ostrom manpower • Idő: {warsDone===0?'10s':'30s'} + megerősítés</div>
                       <button className="btn primary big" disabled={!!war || !!captureWar || resources.pp<50} onClick={()=> startWar(selectedCity)}>⚔️ Háború indítása — {cities.find(c=>c.id===selectedCity.id)?.name}</button>
                       {resources.pp<50 && <p className="warn">Nincs elég PP! ({Math.floor(resources.pp)}/50)</p>}
-                      {tanks.length>0 && <div style={{marginTop:8, fontSize:11}}><b>{tanks.length} tankod van</b> — válassz egyet a térképen és kattints ide! {selectedTankId? '✅ kiválasztva' : ''}</div>}
+                      {tanks.length>0 && <div style={{marginTop:8, fontSize:11}}><b>{tanks.length} tankod</b> • {ships.length} hajó • {planes.length} repülő • {aas.length} AA — válassz egyet a térképen! {selectedTankId||selectedShipId||selectedPlaneId||selectedAAId? '✅ kiválasztva' : ''}</div>}
+                      {Object.keys(silos).filter(k=> silos[k].built).length>0 && (
+                        <div style={{marginTop:8, padding:8, background:'rgba(231,76,60,0.15)', border:'2px solid #e74c3c', borderRadius:8}}>
+                          <div style={{fontWeight:900, fontSize:12, color:'#e74c3c'}}>☢️ ATOMBOMBA KILÖVÉS</div>
+                          <div style={{fontSize:10, color:'#f1c40f'}}>Költség: {formatMoney(NUKE_COST.money)} + {formatManpower(NUKE_COST.manpower)} / lövés — siló: {Object.keys(silos).filter(k=> silos[k].built).length} db</div>
+                          <button className="btn primary big" style={{background:'#e74c3c', borderColor:'#c0392b', marginTop:6, width:'100%'}} disabled={resources.money < NUKE_COST.money || resources.manpower < NUKE_COST.manpower} onClick={()=> launchNuke(selectedCity)}>☢️ KILÖVÉS {selectedCity.name}-ra!</button>
+                          <div style={{fontSize:10, marginTop:4, color:'#ff8a80'}}>Figyelem: város semleges lesz, minden egység megsemmisül! 5.5s repülés.</div>
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="city-tip"><b>Low poly tipp:</b> T1→T4 egyre erősebb & gyorsabb + tech +18% speed! Tankok gurulnak, katonák sorfalban — kicsit ratyi de szerethető.</div>
